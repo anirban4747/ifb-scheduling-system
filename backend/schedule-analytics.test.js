@@ -296,26 +296,6 @@ test("on-time fulfillment rates are null when dispatch data is missing", () => {
     assert.equal(result.onTime.status, "missing_dispatch_dates");
 });
 
-test("on-time fulfillment rates are null when dispatch dates are missing", () => {
-    const snapshots = [{
-        snapshotDate: "2026-11-01",
-        capturedAt: "2026-11-01T10:00:00.000Z",
-        rows: [{
-            customer: "Alpha",
-            partNo: "P1",
-            monthlyCommitments: { "2026-10": 100 },
-            monthlyDispatches: { "2026-10": 80 },
-            monthlyDispatchDates: {}
-        }]
-    }];
-
-    const result = calculateScheduleAnalytics(snapshots, "2026-10", "Alpha", new Date("2026-11-02T00:00:00Z"));
-    assert.equal(result.onTime.quantityRate, null, "quantityRate should be null when dispatch dates missing");
-    assert.equal(result.onTime.lineRate, null, "lineRate should be null when dispatch dates missing");
-    assert.ok(result.onTime.monthlyFulfillment.quantityRate === null, "monthlyFulfillment.quantityRate should be null");
-    assert.ok(result.onTime.monthlyFulfillment.lineRate === null, "monthlyFulfillment.lineRate should be null");
-    assert.equal(result.onTime.status, "missing_dispatch_dates");
-});
 
 test("future delivery months are marked as not yet due", () => {
     const snapshots = [{
