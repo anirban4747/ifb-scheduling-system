@@ -487,20 +487,32 @@ function calculateOnTime(snapshots, month, customer, now = new Date()) {
         return { quantityRate: null, lineRate: null, status: "zero_commitment", dueDate: dueDate.toISOString().slice(0, 10) };
     }
     if (missingDispatchData || missingDispatchDates) {
+        const fulfillment = {
+            quantityRate: null,
+            lineRate: null,
+            committedQty: committedTotal,
+            fulfilledQty,
+            commitmentLines,
+            fulfilledLines
+        };
+        if (missingDispatchDates) {
+            return {
+                quantityRate: null,
+                lineRate: null,
+                status: "missing_dispatch_dates",
+                dueDate: dueDate.toISOString().slice(0, 10),
+                committedQty: committedTotal,
+                monthlyFulfillment: fulfillment,
+                issues
+            };
+        }
         return {
             quantityRate: null,
             lineRate: null,
-            status: missingDispatchDates ? "missing_dispatch_dates" : "missing_dispatch_quantities",
+            status: "missing_dispatch_quantities",
             dueDate: dueDate.toISOString().slice(0, 10),
             committedQty: committedTotal,
-            monthlyFulfillment: {
-                quantityRate: (fulfilledQty / committedTotal) * 100,
-                lineRate: (fulfilledLines / commitmentLines) * 100,
-                committedQty: committedTotal,
-                fulfilledQty,
-                commitmentLines,
-                fulfilledLines
-            },
+            monthlyFulfillment: fulfillment,
             issues
         };
     }
@@ -1263,7 +1275,7 @@ function calculateCustomerActivity(snapshots, targetMonth) {
     const activeCount = customers.filter(c => c.status === "active").length;
     const zeroMonthCount = customers.filter(c => c.status === "zero_this_month").length;
     const atRiskCount = customers.filter(c => c.status === "at_risk").length;
-    const dormantCount = customers.filter(c => c.status === "dormant" || c.status === "never_ordered").length;
+    const dormantCount = customers.filter(c => c.status === "dormant").length;
 
     return {
         targetMonth,
