@@ -42,7 +42,10 @@
                     <span class="nav-icon">📋</span> Master Schedule Records
                 </button>
                 <button class="nav-tab" data-tab="analysis" onclick="switchTab('analysis')">
-                    <span class="nav-icon">📈</span> Company Analysis
+                    <span class="nav-icon">📈</span> Schedule Comparison
+                </button>
+                <button class="nav-tab" data-tab="company-analysis" onclick="switchTab('company-analysis')">
+                    <span class="nav-icon">📊</span> Company Analysis
                 </button>
                 <button class="nav-tab" data-tab="upload" onclick="switchTab('upload')">
                     <span class="nav-icon">📤</span> Excel Bulk Import
@@ -493,6 +496,227 @@
                 <span id="analysisReadiness"></span>
                 <table><tbody id="demandRevisionRows"></tbody></table>
                 <table><tbody id="companyExecutionRows"></tbody></table>
+            </div>
+        </section>
+
+        <!-- ============================================================== -->
+        <!-- TAB 5: COMPANY ANALYSIS                                         -->
+        <!-- ============================================================== -->
+        <section id="tab-company-analysis" class="tab-pane">
+            <div class="section-heading-row">
+                <div>
+                    <h2>Company Analysis</h2>
+                    <p class="panel-subtitle">IFB Company Fulfillment Analysis</p>
+                </div>
+            </div>
+
+            <!-- LOADING STATE -->
+            <div id="companyLoading" class="state-panel">
+                <div class="spinner"></div>
+                <span>Loading company analysis...</span>
+            </div>
+
+            <!-- ERROR STATE -->
+            <div id="companyError" class="state-panel" style="display: none; background: #ffebee; color: #b71c1c;">
+                <span>&nbsp;⚠ Error loading company analysis.</span>
+                <br><br>
+                <button class="btn-sm btn-outline" onclick="refreshCompanyAnalysis()">Retry</button>
+            </div>
+
+            <!-- EMPTY STATE -->
+            <div id="companyEmpty" class="state-panel" style="display: none; color: var(--text-muted);">
+                <span>&nbsp;No data available. Upload the Motor Division Excel file to see analysis.</span>
+            </div>
+
+            <!-- COMPANY ANALYSIS SECTION -->
+            <!-- COMPANY ANALYSIS FILTERS -->
+<div id="companyAnalysisSection" class="ca-filter-card">
+    <div class="ca-filter-head">
+        <div class="ca-snapshot">
+            <span class="ca-snap-label">Snapshot</span>
+            <span class="ca-snap-value" id="companySnapshotLabel">Latest</span>
+            <button type="button" class="btn-mini" onclick="refreshCompanyAnalysis()" title="Refresh">↻</button>
+        </div>
+        <div class="ca-actions" id="companyActions"></div>
+    </div>
+
+    <div class="ca-filter-grid">
+        <div class="ca-field">
+            <label for="companyCustomerSelect">Customer</label>
+            <select id="companyCustomerSelect" onchange="refreshCompanyAnalysis()">
+                <option value="ALL">All Customers</option>
+            </select>
+        </div>
+
+        <div class="ca-field">
+            <label for="companyLineSelect">Line</label>
+            <select id="companyLineSelect" onchange="refreshCompanyAnalysis()">
+                <option value="ALL">All Lines</option>
+            </select>
+        </div>
+
+        <div class="ca-field ca-field-range">
+            <label for="companyFromMonth">Month range</label>
+            <div class="ca-range">
+                <select id="companyFromMonth" onchange="refreshCompanyAnalysis()"></select>
+                <span>to</span>
+                <select id="companyToMonth" onchange="refreshCompanyAnalysis()"></select>
+            </div>
+        </div>
+
+        <div class="ca-field">
+            <label for="companyBasisSelect">Basis</label>
+            <select id="companyBasisSelect" onchange="refreshCompanyAnalysis()">
+                <option value="schedule">Schedule (default)</option>
+                <option value="actual">Actual Customer Schedule</option>
+            </select>
+        </div>
+
+        <div class="ca-field ca-field-target">
+            <label for="companyTargetInput">Target fill rate</label>
+            <div class="ca-input-suffix">
+                <input type="number" id="companyTargetInput" min="50" max="100" value="95" onchange="refreshCompanyAnalysis()">
+                <span>%</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+            <!-- KPI STRIP FOR COMPANY ANALYSIS -->
+            <div id="companyKeyFindings" class="ca-findings" style="display: none;"></div>
+            <div id="companyKpiStrip" class="streamlined-kpi-grid" style="margin-top: 10px;">
+                <div class="s-kpi-card">
+                    <span class="s-kpi-label">Overall Fill Rate</span>
+                    <span class="s-kpi-value" id="companyOverallFillRate">0%</span>
+                    <span class="s-kpi-sub" id="companyOverallFillRateDetail" title="Tooltip: Dispatches divided by Scheduled, null when scheduled is 0">-</span>
+                </div>
+                <div class="s-kpi-card s-card-diff">
+                    <span class="s-kpi-label">Total Shortfall</span>
+                    <span class="s-kpi-value" id="companyTotalShortfall">0</span>
+                    <span class="s-kpi-sub" id="companyTotalShortfallDetail" title="Units clipped at 0, surplus not netted against shortfall">-</span>
+                </div>
+                <div class="s-kpi-card">
+                    <span class="s-kpi-label">Surplus</span>
+                    <span class="s-kpi-value" id="companySurplus">0</span>
+                    <span class="s-kpi-sub" id="companySurplusDetail" title="Dispatch above scheduled, not netted against shortfall">-</span>
+                </div>
+                <div class="s-kpi-card s-card-rate">
+                    <span class="s-kpi-label">Parts / Customers Below Target</span>
+                    <span class="s-kpi-value" id="companyPartsBelowTarget">0</span> / <span class="s-kpi-value" id="companyCustomersBelowTarget">0</span>
+                    <span class="s-kpi-sub" id="companyBelowTargetDetail" title="Fill rate < target (95%)">-</span>
+                </div>
+            </div>
+
+            <!-- MONTHLY TREND CHART -->
+            <div id="companyMonthlyTrend" class="content-panel" style="margin-top: 15px; min-height: 180px;">
+                <canvas id="companyTrendCanvas" width="100%" height="180" style="display: block;"></canvas>
+                <div id="companyTrendNoData" style="text-align: center; color: var(--text-muted); display: none; padding: 20px;">No data available for the selected filters. Upload the Motor Division Excel file to see analysis.</div>
+            </div>
+
+            <!-- HIDE ROWS WITH NO SCHEDULE CHECKBOX -->
+            <div style="margin: 12px 0; padding: 8px 12px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px;">
+                <input type="checkbox" id="companyHideNoSchedule" checked onchange="toggleCompanyHideNoSchedule()">
+                <span style="margin-right: 20px;">Hide rows with no schedule</span>
+                <span id="companyHiddenCount" style="color: var(--text-muted); font-size: 12px;">0 hidden</span>
+            </div>
+
+            <!-- FILL RATE BY LINE TABLE -->
+            <div id="companyByLineTable" class="content-panel" style="margin-top: 15px; display: none;">
+                <div class="panel-header-with-actions">
+                    <h3>Fill Rate by Product Line</h3>
+                    <small>Status chip: green≥target, amber within 10 points below, red otherwise</small>
+                </div>
+                <div class="table-toolbar">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="companyLineSearch" placeholder="Search line..." oninput="companyLineSearchHandler()">
+                </div>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Product Line</th>
+                                <th>Scheduled</th>
+                                <th>Dispatched</th>
+                                <th>Fill Rate</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="companyByLineBody">
+                            <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">Select parameters to view line analysis.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- FILL RATE BY CUSTOMER TABLE -->
+            <div id="companyByCustomerTable" class="content-panel" style="margin-top: 15px; display: none;">
+                <div class="panel-header-with-actions">
+                    <h3>Fill Rate by Customer</h3>
+                    <small>Status chip: green≥target, amber within 10 points below, red otherwise</small>
+                </div>
+                <div class="table-toolbar">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="companyCustomerSearch" placeholder="Search customer..." oninput="companyCustomerSearchHandler()">
+                </div>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Customer</th>
+                                <th>Scheduled</th>
+                                <th>Dispatched</th>
+                                <th>Fill Rate</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="companyByCustomerBody">
+                            <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 24px;">Select parameters to view customer analysis.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            
+
+            <!-- TOP 10 SHORTFALL PARTS TABLE -->
+            <div id="companyShortfallPartsTable" class="content-panel" style="margin-top: 15px; display: none;">
+                <div class="panel-header-with-actions">
+                    <h3>Top 10 Shortfall Parts</h3>
+                </div>
+                <div class="table-toolbar">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="companyShortfallSearch" placeholder="Search part no..." oninput="companyShortfallSearchHandler()">
+                </div>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Part No.</th>
+                                <th>Description</th>
+                                <th>Line</th>
+                                <th>Scheduled</th>
+                                <th>Dispatched</th>
+                                <th>Shortfall</th>
+                                <th>Fill Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody id="companyShortfallBody">
+                            <tr><td colspan="7" style="text-align: center; color: #64748b; padding: 24px;">Select parameters to view shortfall parts.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- DATA QUALITY NOTE (COLLAPSIBLE) -->
+            <div id="companyDataQuality" class="content-panel" style="margin-top: 15px; display: none;">
+                <div class="panel-header-with-actions">
+                    <h3>Data Quality Note</h3>
+                    <button type="button" class="btn-sm btn-outline" onclick="toggleDataQuality()">▶</button>
+                </div>
+                <div id="companyDataQualityContent" style="padding: 10px; background: #f8f9fa; border: 1px solid #e3e6e8; border-radius: 6px;">
+                    <p style="color: var(--text-muted); font-size: 0.85em; margin: 0 0 10px 0;">Loading data quality issues...</p>
+                    <div id="companyQualityIssuesList"></div>
+                </div>
             </div>
         </section>
 

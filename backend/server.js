@@ -13,6 +13,7 @@ const {
     compareWithinSameSheet,
     getSnapshotComparisonMeta
 } = require("./schedule-analytics");
+const { calculateCompanyFulfillment } = require("./company-analysis");
 const { getScheduleRecords } = require("./excel-header");
 
 const app = express();
@@ -927,6 +928,20 @@ app.get("/analytics/compare-within-sheet", (req, res) => {
 app.get("/analytics/comparison-meta", (req, res) => {
     const { snapshotId } = req.query;
     return res.json(getSnapshotComparisonMeta(scheduleSnapshots, snapshotId ? String(snapshotId) : undefined));
+});
+
+app.get("/analytics/company-fulfillment", (req, res) => {
+    const { customer, line, fromMonth, toMonth, basis, target } = req.query;
+    const rows = latestScheduleData;
+    const result = calculateCompanyFulfillment(rows, {
+        customer: customer || "ALL",
+        line: line || "ALL",
+        fromMonth: fromMonth || null,
+        toMonth: toMonth || null,
+        basis: basis || "schedule",
+        target: target !== undefined ? Number(target) : 95
+    });
+    return res.json(result);
 });
 
 app.post("/api/load-sample-demo", (req, res) => {

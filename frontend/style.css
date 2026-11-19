@@ -1720,3 +1720,528 @@ body {
         min-width: 42%;
     }
 }
+
+#tab-company-analysis {
+    --ca-green: #15803d;
+    --ca-green-bg: #dcfce7;
+    --ca-amber: #b45309;
+    --ca-amber-bg: #fef3c7;
+    --ca-red: #b91c1c;
+    --ca-red-bg: #fee2e2;
+    --ca-grey: #64748b;
+    --ca-grey-bg: #e2e8f0;
+}
+
+/* ----- filter bar ----- */
+#tab-company-analysis .s-control-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 16px 24px;
+}
+
+/* month range has two selects and the word "to", keep them on one line */
+
+
+#tab-company-analysis select,
+#tab-company-analysis input[type="number"] {
+    min-height: 38px;
+    padding: 6px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    font: inherit;
+}
+
+#tab-company-analysis input[type="number"] {
+    width: 72px;
+}
+
+/* ----- KPI strip: one row of cards on wide screens ----- */
+#tab-company-analysis #companyKpiStrip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
+}
+
+#tab-company-analysis #companyKpiStrip .s-kpi-card {
+    display: block;
+    padding: 16px 18px;
+    background: #fff;
+    border: 1px solid #e3e8ef;
+    border-radius: 10px;
+}
+
+#tab-company-analysis #companyKpiStrip .s-kpi-label {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--ca-grey);
+}
+
+#tab-company-analysis #companyKpiStrip .s-kpi-value {
+    display: inline;
+    font-size: 1.9rem;
+    font-weight: 700;
+    line-height: 1.3;
+}
+
+#tab-company-analysis #companyKpiStrip .s-kpi-sub {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.8rem;
+    color: var(--ca-grey);
+}
+
+#tab-company-analysis .ca-text-green { color: var(--ca-green); }
+#tab-company-analysis .ca-text-amber { color: var(--ca-amber); }
+#tab-company-analysis .ca-text-red   { color: var(--ca-red); }
+#tab-company-analysis .ca-text-grey  { color: var(--ca-grey); }
+
+/* ----- panels ----- */
+#tab-company-analysis .content-panel {
+    background: #fff;
+    border: 1px solid #e3e8ef;
+    border-radius: 10px;
+    padding: 18px 20px;
+}
+
+#tab-company-analysis .panel-header-with-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+#tab-company-analysis .panel-header-with-actions h3 {
+    margin: 0;
+}
+
+#tab-company-analysis .panel-header-with-actions small {
+    color: var(--ca-grey);
+}
+
+/* ----- trend chart ----- */
+#tab-company-analysis .ca-trend {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 300px;
+}
+
+#tab-company-analysis .ca-grid { stroke: #e2e8f0; stroke-width: 1; }
+#tab-company-analysis .ca-axis { fill: var(--ca-grey); font-size: 12px; }
+#tab-company-analysis .ca-barlabel { fill: #1e293b; font-size: 12px; font-weight: 600; }
+#tab-company-analysis .ca-target { stroke: #1e293b; stroke-width: 1.5; stroke-dasharray: 6 5; }
+#tab-company-analysis .ca-svgbar.ca-green { fill: #22c55e; }
+#tab-company-analysis .ca-svgbar.ca-amber { fill: #f59e0b; }
+#tab-company-analysis .ca-svgbar.ca-red   { fill: #ef4444; }
+#tab-company-analysis .ca-svgbar.ca-grey  { fill: #94a3b8; }
+
+/* ----- tables ----- */
+#tab-company-analysis .table-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    background: #f8fafc;
+    border: 1px solid #e3e8ef;
+    border-radius: 8px;
+}
+
+#tab-company-analysis .table-toolbar input[type="text"] {
+    min-height: 34px;
+    width: min(260px, 100%);
+    padding: 4px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font: inherit;
+}
+
+#tab-company-analysis .table-responsive {
+    overflow-x: auto;
+}
+
+#tab-company-analysis .data-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#tab-company-analysis .data-table th {
+    text-align: left;
+    padding: 10px 12px;
+    font-size: 0.85rem;
+    color: #334155;
+    background: #f8fafc;
+    border-bottom: 1px solid #e3e8ef;
+    white-space: nowrap;
+    user-select: none;
+}
+
+#tab-company-analysis .data-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #eef2f7;
+    vertical-align: middle;
+}
+
+#tab-company-analysis .data-table tbody tr:hover {
+    background: #f8fafc;
+}
+
+#tab-company-analysis .ca-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+#tab-company-analysis .ca-sub {
+    color: var(--ca-grey);
+}
+
+#tab-company-analysis .ca-empty {
+    text-align: center;
+    color: var(--ca-grey);
+    padding: 24px;
+}
+
+/* fill rate number with a small bar beside it */
+#tab-company-analysis .ca-ratecell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 150px;
+}
+
+#tab-company-analysis .ca-ratecell > span:first-child {
+    width: 56px;
+    font-variant-numeric: tabular-nums;
+}
+
+#tab-company-analysis .ca-bar {
+    flex: 1;
+    height: 8px;
+    background: #e2e8f0;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+#tab-company-analysis .ca-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+}
+
+#tab-company-analysis .ca-bar i.ca-green { background: #22c55e; }
+#tab-company-analysis .ca-bar i.ca-amber { background: #f59e0b; }
+#tab-company-analysis .ca-bar i.ca-red   { background: #ef4444; }
+#tab-company-analysis .ca-bar i.ca-grey  { background: #94a3b8; }
+
+/* status chips */
+#tab-company-analysis .ca-chip {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+#tab-company-analysis .ca-chip.ca-green { color: var(--ca-green); background: var(--ca-green-bg); }
+#tab-company-analysis .ca-chip.ca-amber { color: var(--ca-amber); background: var(--ca-amber-bg); }
+#tab-company-analysis .ca-chip.ca-red   { color: var(--ca-red);   background: var(--ca-red-bg); }
+#tab-company-analysis .ca-chip.ca-grey  { color: var(--ca-grey);  background: var(--ca-grey-bg); }
+
+/* ----- data quality ----- */
+#tab-company-analysis .ca-issue {
+    padding: 6px 0;
+    border-bottom: 1px solid #e3e8ef;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#tab-company-analysis .ca-issue:last-child {
+    border-bottom: 0;
+}
+
+#tab-company-analysis .ca-issue .ca-chip {
+    flex-shrink: 0;
+}
+
+#tab-company-analysis .ca-issue ul {
+    margin: 2px 0 0 12px;
+    padding: 0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+#tab-company-analysis .ca-issue li {
+    margin-bottom: 2px;
+}
+
+/* ----- error box ----- */
+#tab-company-analysis .ca-err-detail {
+    margin-top: 6px;
+    font-size: 0.85rem;
+}
+
+/* Chevron button for data quality toggle */
+#tab-company-analysis .ca-dq-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--border-dark);
+    border-radius: var(--radius-sm);
+    background: #fff;
+    color: var(--text-main);
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform 0.3s ease, background 0.2s;
+}
+
+#tab-company-analysis .ca-dq-toggle:hover {
+    background: #f8fafc;
+}
+
+#tab-company-analysis .ca-dq-toggle.ca-rotated {
+    transform: rotate(90deg);
+}
+
+/* state panels */
+.state-panel {
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
+.state-panel.error {
+    background: #ffebee;
+    color: #b71c1c;
+    border-color: #fca5a5;
+}
+
+.state-panel.empty {
+    color: var(--text-muted);
+}
+
+/* ----- small screens ----- */
+@media (max-width: 640px) {
+    #tab-company-analysis .s-control-item,
+    #tab-company-analysis .s-control-item label,
+    #tab-company-analysis select {
+        width: 100%;
+    }
+
+    #tab-company-analysis .ca-trend {
+        max-height: 250px;
+    }
+}
+
+/* sort arrows in tables */
+.sort-arrow {
+    display: inline-block;
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    transition: transform 0.15s, color 0.15s;
+}
+
+.sort-arrow.active {
+    color: var(--primary);
+    transform: rotate(180deg);
+}
+
+/* over-supplied chip */
+.ca-amber.oversupplied {
+    background: #fef3c7;
+    color: #b45309;
+    border: 1px solid #fcd34d;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+/* ---- styles the Company Analysis tab uses but never defined ---- */
+.spinner {
+    width: 18px;
+    height: 18px;
+    border: 3px solid #cbd5e1;
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#companyLoading { align-items: center; gap: 10px; }
+
+.btn-sm {
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.btn-outline {
+    background: transparent;
+    color: var(--primary);
+    border: 1px solid var(--border-dark);
+}
+.btn-outline:hover { background: #f8fafc; border-color: var(--primary); }
+.btn-mini {
+    border: 1px solid var(--border-dark);
+    background: #fff;
+    border-radius: 4px;
+    padding: 0 6px;
+    cursor: pointer;
+}
+.ca-text-muted { color: var(--text-muted); }
+
+.ca-findings {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 18px;
+    margin-top: 12px;
+    padding: 10px 16px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+}
+.strip-label { font-weight: 700; color: var(--primary); }
+.strip-finding { color: #334155; }
+
+/* ===== Company Analysis: filter card ===== */
+.ca-filter-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    padding: 16px 20px 20px;
+    margin: 20px 0 16px;
+}
+
+.ca-filter-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-bottom: 14px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.ca-snapshot {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ca-snap-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+}
+
+.ca-snap-value {
+    background: #e0f2fe;
+    color: #0369a1;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 3px 12px;
+    border-radius: 999px;
+}
+
+.ca-filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 16px 20px;
+    align-items: end;
+}
+
+.ca-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.ca-field > label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+}
+
+#tab-company-analysis .ca-field select,
+#tab-company-analysis .ca-field input[type="number"] {
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-main);
+    background: #fff;
+    border: 1px solid var(--border-dark);
+    border-radius: var(--radius-sm);
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+#tab-company-analysis .ca-field select:focus,
+#tab-company-analysis .ca-field input[type="number"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.ca-field-range {
+    grid-column: span 2;
+}
+
+.ca-range {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ca-range select {
+    flex: 1;
+    min-width: 0;
+}
+
+.ca-range span {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.ca-input-suffix {
+    position: relative;
+}
+
+#tab-company-analysis .ca-input-suffix input[type="number"] {
+    padding-right: 32px;
+}
+
+.ca-input-suffix span {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 14px;
+    pointer-events: none;
+}
+
+@media (max-width: 640px) {
+    .ca-field-range { grid-column: auto; }
+}

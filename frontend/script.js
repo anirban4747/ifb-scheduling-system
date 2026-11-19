@@ -59,7 +59,11 @@ function showToast(message, type = "info") {
     if (type === "success") icon = "✅";
     if (type === "error") icon = "❌";
 
-    toast.innerHTML = `<span>${icon}</span> <span>${message}</span>`;
+    const iconEl = document.createElement("span");
+    iconEl.textContent = icon;
+    const msgEl = document.createElement("span");
+    msgEl.textContent = message;
+    toast.append(iconEl, msgEl);
     container.appendChild(toast);
 
     setTimeout(() => {
@@ -92,6 +96,13 @@ function switchTab(tabId) {
     }
     if (tabId === "upload") {
         loadImportedFilesList();
+    }
+        if (tabId === "company-analysis") {
+        const tabAnalysis = document.getElementById("tab-analysis");
+        const tabCompanyAnalysis = document.getElementById("tab-company-analysis");
+        if (tabAnalysis) tabAnalysis.classList.remove("active");
+        if (tabCompanyAnalysis) tabCompanyAnalysis.classList.add("active");
+        refreshCompanyAnalysis();
     }
 }
 
@@ -654,6 +665,14 @@ async function initAnalysisTab() {
     runStreamlinedAnalysis();
 }
 
+function setOptionsKeep(select, html, fallbackValue) {
+    if (!select) return;
+    const previous = select.value;
+    select.innerHTML = html;
+    if (previous && [...select.options].some(o => o.value === previous)) select.value = previous;
+    else if (fallbackValue !== undefined) select.value = fallbackValue;
+}
+
 async function loadComparisonMeta(selectedSnapshotId) {
     try {
         const url = selectedSnapshotId
@@ -728,36 +747,17 @@ async function loadComparisonMeta(selectedSnapshotId) {
 
         const months = meta.availableMonths || [];
         const allMonths = meta.allMonths || months;
-        const diffMonthOpts = `<option value="ALL">All Months</option>` +
-            allMonths.map(m => `<option value="${escapeHTML(m)}">${formatMonthLabel(m)} (${m})</option>`).join("");
-
-        if (diffMonthSel) diffMonthSel.innerHTML = diffMonthOpts;
-
-        if (sameMetricMonth) {
-            sameMetricMonth.innerHTML = `<option value="ALL">All Months</option>` +
-                months.map(m => `<option value="${escapeHTML(m)}">${formatMonthLabel(m)} (${m})</option>`).join("");
-            if (months.length > 0) sameMetricMonth.value = months[0];
-        }
-
-        if (sameMonthA) {
-            sameMonthA.innerHTML = months.map(m => `<option value="${escapeHTML(m)}">${formatMonthLabel(m)} (${m})</option>`).join("");
-            if (months.length > 0) sameMonthA.value = months[0];
-        }
-        if (sameMonthB) {
-            sameMonthB.innerHTML = months.map(m => `<option value="${escapeHTML(m)}">${formatMonthLabel(m)} (${m})</option>`).join("");
-            if (months.length > 1) sameMonthB.value = months[1];
-            else if (months.length > 0) sameMonthB.value = months[0];
-        }
+        const monthOpt = m => `<option value="${escapeHTML(m)}">${formatMonthLabel(m)} (${m})</option>`;
+        setOptionsKeep(diffMonthSel, `<option value="ALL">All Months</option>` + allMonths.map(monthOpt).join(""));
+        setOptionsKeep(sameMetricMonth, `<option value="ALL">All Months</option>` + months.map(monthOpt).join(""), months[0]);
+        setOptionsKeep(sameMonthA, months.map(monthOpt).join(""), months[0]);
+        setOptionsKeep(sameMonthB, months.map(monthOpt).join(""), months[1] ?? months[0]);
 
         const customers = meta.availableCustomers || [];
         const allCustomers = meta.allCustomers || customers;
-        const diffCustOpts = `<option value="ALL">All Customers</option>` +
-            allCustomers.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join("");
-        if (diffCustSel) diffCustSel.innerHTML = diffCustOpts;
-
-        const sameCustOpts = `<option value="ALL">All Customers</option>` +
-            customers.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join("");
-        if (sameCustSel) sameCustSel.innerHTML = sameCustOpts;
+        const custOpt = c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`;
+        setOptionsKeep(diffCustSel, `<option value="ALL">All Customers</option>` + allCustomers.map(custOpt).join(""));
+        setOptionsKeep(sameCustSel, `<option value="ALL">All Customers</option>` + customers.map(custOpt).join(""));
 
         return meta;
     } catch (err) {
@@ -1351,7 +1351,7 @@ async function deleteScheduleRow(index) {
     renderMasterRecordsTable();
     showToast("Schedule row deleted", "info");
 }
-
+function csvCell(v) { return `"${String(v ?? "").replace(/"/g, '""')}"`; }
 function exportRecordsToCSV() {
     if (!allScheduleRows.length) {
         showToast("No records available to export", "error");
@@ -1370,29 +1370,16 @@ function exportRecordsToCSV() {
     ];
     const csvRows = [headers.join(",")];
 
-    allScheduleRows.forEach((r, idx) => {
+        allScheduleRows.forEach((r, idx) => {
         csvRows.push([
-            `"${r.serialNo || idx + 1}"`,
-            `"${r.customerGroup || r.customer || ''}"`,
-            `"${r.customerCode || ''}"`,
-            `"${r.customerName2 || ''}"`,
-            `"${r.partNo || ''}"`,
-            `"${r.helper || ''}"`,
-            `"${r.customerPartNo || ''}"`,
-            `"${r.line || ''}"`,
-            `"${r.model || ''}"`,
-            `"${r.oem || ''}"`,
-            `"${r.productDescription || ''}"`,
+            r.serialNo || idx + 1, r.customerGroup || r.customer, r.customerCode, r.customerName2,
+            r.partNo, r.helper, r.customerPartNo, r.line, r.model, r.oem, r.productDescription,
             getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0),
             getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0),
             getMonthlyScheduleQuantity(r, month3Key, 0),
-            `"${r.version || 'Current'}"`,
-            `"${r.scheduleReceivedDate || ''}"`,
-            r.actualDispatch || 0,
-            r.balance === null || r.balance === undefined ? "" : formatNumber(r.balance),
-            `"${r.importedAt || ''}"`,
-            `"${r.source || ''}"`
-        ].join(","));
+            r.version || "Current", r.scheduleReceivedDate, r.actualDispatch || 0,
+            r.balance, r.importedAt, r.source
+        ].map(csvCell).join(","));
     });
 
     const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -1430,8 +1417,8 @@ async function loadImportedFilesList() {
                     <td>${escapeHTML(dateStr)}</td>
                     <td><span class="badge-accent">${formatNumber(file.rowCount)} rows</span></td>
                     <td style="text-align: center; white-space: nowrap;">
-                        <button type="button" class="btn-action-icon" onclick="downloadImportedFile('${escapeHTML(file.snapshotId)}')" title="Download Excel File">📥</button>
-                        <button type="button" class="btn-action-icon btn-delete-row" onclick="deleteImportedFile('${escapeHTML(file.snapshotId)}', '${escapeHTML(file.source || file.filename)}')" title="Delete File & Snapshot">🗑️</button>
+                        <button type="button" class="btn-action-icon" data-id="${escapeHTML(file.snapshotId)}" onclick="downloadImportedFile(this.dataset.id)" title="Download Excel File">📥</button>
+                        <button type="button" class="btn-action-icon btn-delete-row" data-id="${escapeHTML(file.snapshotId)}" data-name="${escapeHTML(file.source || file.filename)}" onclick="deleteImportedFile(this.dataset.id, this.dataset.name)" title="Delete File & Snapshot">🗑️</button>
                     </td>
                 </tr>
             `;
@@ -1643,6 +1630,7 @@ async function loadDashboardData() {
 }
 
 async function initApplication() {
+    document.querySelectorAll('a[href="/api/sample-template"]').forEach(a => { a.href = apiUrl("/api/sample-template"); });
     startClock();
     initializeSnapshotDate();
     initDragAndDrop();
@@ -1659,3 +1647,674 @@ async function initApplication() {
 }
 
 document.addEventListener("DOMContentLoaded", initApplication);
+
+const caState = {
+    token: 0,          // ignores out-of-date responses
+    first: true,       // first successful load fills the dropdowns
+    data: null,
+    sort: {},          // per-table sort: { line: {key, dir}, ... }
+    nf: new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }),
+    // Persisted filter state (localStorage, wrapped in try/catch)
+    persist: {
+        key: "company-analysis-filter-state",
+        get() {
+            try {
+                const raw = localStorage.getItem(this.key);
+                return raw ? JSON.parse(raw) : null;
+            } catch (e) {
+                return null;
+            }
+        },
+        set(filters) {
+            try {
+                localStorage.setItem(this.key, JSON.stringify(filters));
+            } catch (e) { /* ignore storage full / private mode */ }
+        }
+    }
+};
+
+/* ---------- small helpers ---------- */
+function caEl(id) { return document.getElementById(id); }
+
+function caPersistSave() {
+    caState.persist.set({
+        customer: caEl("companyCustomerSelect")?.value,
+        line: caEl("companyLineSelect")?.value,
+        fromMonth: caEl("companyFromMonth")?.value,
+        toMonth: caEl("companyToMonth")?.value,
+        target: caTarget()
+    });
+}
+
+/* returns true if any control was changed (so the caller can re-fetch) */
+function caPersistRestore() {
+    const sel = caState.persist.get();
+    if (!sel) return false;
+    let changed = false;
+    const setIf = (id, value) => {
+        const el = caEl(id);
+        if (value && el && [...el.options].some(o => o.value === value) && el.value !== value) {
+            el.value = value;
+            changed = true;
+        }
+    };
+    setIf("companyCustomerSelect", sel.customer);
+    setIf("companyLineSelect", sel.line);
+    setIf("companyFromMonth", sel.fromMonth);
+    setIf("companyToMonth", sel.toMonth);
+    const t = caEl("companyTargetInput");
+    if (sel.target !== undefined && t && t.value !== String(sel.target)) {
+        t.value = String(sel.target);
+        changed = true;
+    }
+    return changed;
+}
+
+function caTarget() {
+    const input = caEl("companyTargetInput");
+    if (!input) return 95;
+    const v = Number(input.value);
+    return Number.isFinite(v) && v >= 50 && v <= 100 ? v : 95;
+}
+
+/* ---------- trend chart: label-safe rendering ---------- */
+function caEsc(value) {
+    return String(value ?? "").replace(/[&<>"']/g, ch => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]
+    ));
+}
+
+function caNum(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+}
+
+function caPick(obj, keys) {
+    if (!obj) return undefined;
+    for (const k of keys) {
+        if (obj[k] !== undefined && obj[k] !== null) return obj[k];
+    }
+    return undefined;
+}
+
+function caFmt(n) { return n === null || n === undefined ? "N/A" : caState.nf.format(n); }
+function caPct(n) { return n === null || n === undefined ? "N/A" : n.toFixed(1) + "%"; }
+
+function caMonthLabel(key) {
+    const m = /^(\d{4})-(\d{2})$/.exec(String(key));
+    if (!m) return String(key);
+    const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${names[Number(m[2]) - 1] || m[2]} ${m[1]}`;
+}
+
+/* the API may return arrays or objects keyed by name; accept both */
+function caRows(x) {
+    if (Array.isArray(x)) return x;
+    if (x && typeof x === "object") return Object.entries(x).map(([k, v]) => ({ ...(v || {}), __key: k }));
+    return [];
+}
+
+function caNorm(row, nameKeys) {
+    const scheduled = caNum(caPick(row, ["scheduled", "scheduledQty", "schedule", "basisQty"]));
+    const dispatched = caNum(caPick(row, ["dispatched", "dispatchedQty", "dispatch", "dispatchQty"]));
+    let rate = scheduled && scheduled > 0 && dispatched !== null ? (dispatched / scheduled) * 100 : null;
+    if (rate === null && scheduled === null) rate = caNum(caPick(row, ["fillRate", "fillRatePct"]));
+    let shortfall = caNum(caPick(row, ["shortfall", "shortfallQty"]));
+    if (shortfall === null && scheduled !== null && dispatched !== null) shortfall = Math.max(scheduled - dispatched, 0);
+    return {
+        name: String(caPick(row, nameKeys) ?? row.__key ?? ""),
+        part: String(caPick(row, ["partNo", "part", "partNumber"]) ?? ""),
+        description: String(caPick(row, ["description", "desc"]) ?? ""),
+        line: String(caPick(row, ["line", "productLine"]) ?? ""),
+        customer: String(caPick(row, ["customer", "customerName"]) ?? ""),
+        scheduled: scheduled ?? 0,
+        dispatched: dispatched ?? 0,
+        shortfall: shortfall ?? 0,
+        surplus: caNum(caPick(row, ["surplus", "surplusQty"])),
+        rate,
+        raw: row
+    };
+}
+
+/* green >= target, amber within 10 points below, red otherwise */
+function caStatus(rate, target) {
+    if (rate === null || rate === undefined) return { cls: "ca-grey", label: "N/A" };
+    if (rate >= target) return { cls: "ca-green", label: "On target" };
+    if (rate >= target - 10) return { cls: "ca-amber", label: "Close" };
+    return { cls: "ca-red", label: "Below target" };
+}
+
+/* ---------- dropdown handling ---------- */
+function caFillSelect(select, values, labelFn, keepAll) {
+    if (!select) return;
+    const current = select.value;
+    const options = keepAll ? [`<option value="ALL">${select.id === "companyCustomerSelect" ? "All Customers" : "All Lines"}</option>`] : [];
+    values.forEach(v => options.push(`<option value="${caEsc(v)}">${caEsc(labelFn ? labelFn(v) : v)}</option>`));
+    select.innerHTML = options.join("");
+    if ([...select.options].some(o => o.value === current)) select.value = current;
+}
+
+function caAddMissingOptions(select, values) {
+    if (!select) return;
+    const have = new Set([...select.options].map(o => o.value));
+    values.forEach(v => {
+        if (v && !have.has(v)) {
+            const opt = document.createElement("option");
+            opt.value = v;
+            opt.textContent = v;
+            select.appendChild(opt);
+        }
+    });
+}
+
+/* ---------- visibility ---------- */
+function caShowResults(show) {
+    const kpi = caEl("companyKpiStrip");
+    if (kpi) kpi.style.display = show ? "grid" : "none";
+    ["companyMonthlyTrend", "companyByLineTable", "companyByCustomerTable", "companyShortfallPartsTable", "companyKeyFindings"].forEach(id => {
+        const el = caEl(id);
+        if (el) el.style.display = show ? "block" : "none";
+    });
+    if (!show) {
+        const dq = caEl("companyDataQuality");
+        if (dq) dq.style.display = "none";
+    }
+}
+
+/* ---------- monthly trend table under chart ---------- */
+function caRenderTrendTable(months, target) {
+    const box = caEl("companyMonthlyTrend");
+    if (!box) return;
+    if (!months.length) return;
+    const thead = `
+        <tr>
+            <th>Month</th>
+            <th>Scheduled</th>
+            <th>Dispatched</th>
+            <th>Shortfall</th>
+            <th>Fill Rate</th>
+        </tr>`;
+    const tbody = months.map(m => {
+        var ratePct = m.rate !== null ? m.rate.toFixed(1) + "%" : "N/A";
+        var shortfall = m.shortfall;
+        return `<tr>
+            <td>${caMonthLabel(m.name)}</td>
+            <td>${caFmt(m.scheduled)}</td>
+            <td>${caFmt(m.dispatched)}</td>
+            <td>${caFmt(shortfall)}</td>
+            <td>${ratePct}</td>
+        </tr>`;
+    }).join("");
+    var table = document.createElement("table");
+    table.className = "data-table";
+    table.innerHTML = thead + tbody;
+    // Insert below the SVG chart
+    var svg = box.querySelector("svg.ca-trend");
+    if (svg) { box.insertBefore(table, svg.nextSibling); }
+    else { box.appendChild(table); }
+}
+
+/* ---------- main entry point (called by switchTab and the filters) ---------- */
+async function refreshCompanyAnalysis() {
+    if (!caEl("tab-company-analysis")) return;
+    const token = ++caState.token;
+    const loading = caEl("companyLoading");
+    const errBox = caEl("companyError");
+    const emptyBox = caEl("companyEmpty");
+
+    loading.style.display = "flex";
+    errBox.style.display = "none";
+    emptyBox.style.display = "none";
+    caShowResults(false);
+    caInstallExportButton();
+
+    try {
+        const params = new URLSearchParams();
+        const customer = caEl("companyCustomerSelect")?.value;
+        const line = caEl("companyLineSelect")?.value;
+        if (customer && customer !== "ALL") params.set("customer", customer);
+        if (line && line !== "ALL") params.set("line", line);
+        params.set("basis", caEl("companyBasisSelect")?.value || "schedule");
+        params.set("target", String(caTarget()));
+
+        if (!caState.first) {
+            let from = caEl("companyFromMonth")?.value;
+            let to = caEl("companyToMonth")?.value;
+            if (from && to && from > to) {            // keep the range valid
+                [from, to] = [to, from];
+                caEl("companyFromMonth").value = from;
+                caEl("companyToMonth").value = to;
+            }
+            if (from) params.set("fromMonth", from);
+            if (to) params.set("toMonth", to);
+            caPersistSave();
+        }
+
+        const res = await fetch(apiUrl(`/analytics/company-fulfillment?${params.toString()}`));
+        if (!res.ok) throw new Error(`Server answered HTTP ${res.status}`);
+        let data = await res.json();
+        if (data && data.overall === undefined && data.data) data = data.data;   // unwrap { data: {...} }
+        if (token !== caState.token) return;                                      // a newer request is running
+
+        window.__companyData = data;
+        caState.data = data;
+        caRenderAll(data);
+    } catch (err) {
+        if (token !== caState.token) return;
+        console.error("Company analysis failed:", err);
+        loading.style.display = "none";
+        let detail = errBox.querySelector(".ca-err-detail");
+        if (!detail) {
+            detail = document.createElement("div");
+            detail.className = "ca-err-detail";
+            errBox.insertBefore(detail, errBox.querySelector("button"));
+        }
+        detail.textContent = `Reason: ${err.message}. Check that the server is running and that an Excel file has been uploaded.`;
+        errBox.style.display = "block";
+    }
+}
+
+function caRenderAll(data) {
+    const loading = caEl("companyLoading");
+    const emptyBox = caEl("companyEmpty");
+    const target = caTarget();
+
+    const months = caRows(data.byMonth).map(r => caNorm(r, ["month", "monthKey", "name"])).sort((a, b) => a.name.localeCompare(b.name));
+    const lines = caRows(data.byLine).map(r => caNorm(r, ["line", "productLine", "name"]));
+    const customers = caRows(data.byCustomer).map(r => caNorm(r, ["customer", "customerName", "name"]));
+    const parts = caRows(data.topShortfallParts).map(r => caNorm(r, ["partNo", "part", "name"]));
+    const overall = caNorm(data.overall || {}, ["name"]);
+
+    loading.style.display = "none";
+
+    const hasData = months.length || lines.length || customers.length || overall.scheduled > 0;
+    if (!hasData) {
+        emptyBox.style.display = "block";
+        return;
+    }
+
+    /* dropdowns: first load builds them from the data, later loads only add what is new */
+    if (caState.first) {
+        const monthKeys = months.map(m => m.name);
+        caFillSelect(caEl("companyFromMonth"), monthKeys, caMonthLabel, false);
+        caFillSelect(caEl("companyToMonth"), monthKeys, caMonthLabel, false);
+        if (monthKeys.length) {
+            caEl("companyFromMonth").value = monthKeys[0];
+            caEl("companyToMonth").value = monthKeys[monthKeys.length - 1];
+        }
+        caFillSelect(caEl("companyCustomerSelect"), customers.map(c => c.name).sort(), null, true);
+        caFillSelect(caEl("companyLineSelect"), lines.map(l => l.name).sort(), null, true);
+        caInitTableSorting();
+        caState.first = false;
+        if (caPersistRestore()) { refreshCompanyAnalysis(); return; }   // re-fetch with saved filters
+    } else {
+        caAddMissingOptions(caEl("companyCustomerSelect"), customers.map(c => c.name));
+        caAddMissingOptions(caEl("companyLineSelect"), lines.map(l => l.name));
+    }
+
+    const label = caPick(data, ["snapshotLabel", "snapshotName", "snapshotId"]);
+    if (typeof label === "string" && caEl("companySnapshotLabel")) caEl("companySnapshotLabel").textContent = label;
+
+    caShowResults(true);
+    caRenderKpis(overall, data.overall || {}, target);
+    caRenderTrend(months, target);
+    caRenderTrendTable(months, target);
+
+    caState.tables = {
+        line: { rows: lines, body: "companyByLineBody", search: "companyLineSearch", kind: "status", empty: "No product lines for these filters." },
+        customer: { rows: customers, body: "companyByCustomerBody", search: "companyCustomerSearch", kind: "status", empty: "No customers for these filters." },
+        parts: { rows: parts, body: "companyShortfallBody", search: "companyShortfallSearch", kind: "parts", empty: "No shortfall parts for these filters." }
+    };
+    caState.sort.line = caState.sort.line || { key: "scheduled", dir: "desc" };
+    caState.sort.customer = caState.sort.customer || { key: "scheduled", dir: "desc" };
+    caState.sort.parts = caState.sort.parts || { key: "shortfall", dir: "desc" };
+    toggleCompanyHideNoSchedule();
+
+    caRenderQuality(data.dataQuality);
+
+    /* key findings strip */
+    caRenderKeyFindings({ months, lines, customers, parts });
+}
+
+/* ---------- key findings strip ---------- */
+function caRenderKeyFindings({ lines, customers }) {
+    const el = caEl("companyKeyFindings");
+    if (!el) return;
+    const findings = [];
+
+    const rated = lines.filter(l => l.rate !== null && l.scheduled > 0);
+    if (rated.length) {
+        const low = rated.reduce((a, b) => (b.rate < a.rate ? b : a));
+        if (low.rate < 100) findings.push(`Lowest fill rate: ${low.name || "Unassigned"} at ${low.rate.toFixed(1)}%`);
+    }
+
+    const big = customers.reduce((a, b) => (b.shortfall > (a ? a.shortfall : 0) ? b : a), null);
+    if (big && big.shortfall > 0) findings.push(`Largest shortfall: ${big.name} (${caFmt(big.shortfall)} units)`);
+
+    const under10 = customers.filter(c => c.rate !== null && c.scheduled > 0 && c.rate < 10).length;
+    if (under10) findings.push(`${under10} customer${under10 > 1 ? "s" : ""} under 10% fill rate`);
+
+    const unassigned = lines.filter(l => !l.name || l.name === "Unassigned" || l.name === "Uncategorized").length;
+    if (unassigned) findings.push(`${unassigned} uncategorized line${unassigned > 1 ? "s" : ""}`);
+    const numericLines = lines.filter(l => /^\d+$/.test(l.name)).length;
+    if (numericLines) findings.push(`${numericLines} line name${numericLines > 1 ? "s look" : " looks"} like part numbers`);
+
+    if (!findings.length) findings.push("Analysis based on available schedule data");
+
+    el.innerHTML = `<span class="strip-label">Key findings:</span>` +
+        findings.slice(0, 4).map(f => `<span class="strip-finding">• ${caEsc(f)}</span>`).join("");
+    el.style.display = "flex";
+}
+/* status chip for over-supplied */
+function caOverSuppliedChip(rate, target) {
+    if (rate === null || rate === undefined || rate <= target) return "";
+    if (rate >= target + 10) return `<span class="ca-chip ca-amber">Over-supplied</span>`;
+    return "";
+}
+
+/* ---------- KPI strip ---------- */
+function caRenderKpis(overall, rawOverall, target) {
+    const set = (id, text) => { const el = caEl(id); if (el) el.textContent = text; };
+    const rateStatus = caStatus(overall.rate, target);
+    const overSupplied = overall.rate !== null && overall.rate > target + 10 ? "Over-supplied" : "";
+
+    set("companyOverallFillRate", caPct(overall.rate));
+    const detailEl = caEl("companyOverallFillRateDetail");
+    if (detailEl) {
+        detailEl.textContent = `${caFmt(overall.dispatched)} dispatched of ${caFmt(overall.scheduled)} scheduled`;
+        if (overSupplied) {
+            const chip = document.createElement("span");
+            chip.className = "ca-chip ca-amber";
+            chip.style.marginLeft = "6px";
+            chip.textContent = "Over-supplied";
+            detailEl.appendChild(chip);
+        }
+    }
+    const rateEl = caEl("companyOverallFillRate");
+    if (rateEl) rateEl.className = "s-kpi-value ca-text-" + rateStatus.cls.replace("ca-", "");
+
+    set("companyTotalShortfall", caFmt(overall.shortfall));
+    set("companyTotalShortfallDetail", "Units not shipped, counted part by part and month by month");
+
+    const surplus = overall.surplus !== null ? overall.surplus : caNum(caPick(rawOverall, ["surplus"]));
+    set("companySurplus", caFmt(surplus));
+    set("companySurplusDetail", "Shipped above the schedule (not subtracted from shortfall)");
+
+    const partsBelow = caNum(caPick(rawOverall, ["partsBelowTarget", "partsBelow"]));
+    const custBelow = caNum(caPick(rawOverall, ["customersBelowTarget", "customersBelow"]));
+    set("companyPartsBelowTarget", caFmt(partsBelow));
+    set("companyCustomersBelowTarget", caFmt(custBelow));
+    set("companyBelowTargetDetail", `Fill rate under ${target}% (parts / customers)`);
+}
+
+/* ---------- monthly trend (inline SVG, no libraries) ---------- */
+function caRenderTrend(months, target) {
+    const box = caEl("companyMonthlyTrend");
+    if (!box) return;
+    if (!months.length) {
+        box.innerHTML = `<div class="ca-empty">No monthly data for these filters.</div>`;
+        return;
+    }
+    const W = 720, H = 250, padL = 44, padR = 16, padT = 28, padB = 44;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const maxV = Math.max(100, target, ...months.map(m => m.rate || 0));
+    const y = v => padT + plotH - (v / maxV) * plotH;
+    const slot = plotW / months.length;
+    const bw = Math.min(64, slot * 0.6);
+
+    const ticks = [0, 25, 50, 75, 100].filter(t => t <= maxV);
+    const grid = ticks.map(t =>
+        `<line x1="${padL}" x2="${W - padR}" y1="${y(t)}" y2="${y(t)}" class="ca-grid"/>` +
+        `<text x="${padL - 8}" y="${y(t) + 4}" text-anchor="end" class="ca-axis">${t}%</text>`).join("");
+
+    const bars = months.map((m, i) => {
+        const cx = padL + slot * i + slot / 2;
+        const rate = m.rate === null ? 0 : m.rate;
+        const st = caStatus(m.rate, target);
+        const top = y(rate);
+        return `<g>
+            <title>${caEsc(caMonthLabel(m.name))}: ${caFmt(m.dispatched)} of ${caFmt(m.scheduled)} (${caPct(m.rate)})</title>
+            <rect x="${cx - bw / 2}" y="${top}" width="${bw}" height="${Math.max(padT + plotH - top, 1)}" rx="3" class="ca-svgbar ${st.cls}"/>
+            <text x="${cx}" y="${top - 6}" text-anchor="middle" class="ca-barlabel">${caPct(m.rate)}</text>
+            <text x="${cx}" y="${H - padB + 18}" text-anchor="middle" class="ca-axis">${caEsc(caMonthLabel(m.name))}</text>
+        </g>`;
+    }).join("");
+
+    box.innerHTML = `
+        <div class="panel-header-with-actions">
+            <h3>Monthly Fill Rate</h3>
+            <small>Dispatched divided by scheduled. Dashed line is the ${target}% target.</small>
+        </div>
+        <svg class="ca-trend" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly fill rate">
+            ${grid}
+            ${bars}
+            <line x1="${padL}" x2="${W - padR}" y1="${y(target)}" y2="${y(target)}" class="ca-target"/>
+        </svg>`;
+}
+
+/* ---------- tables ---------- */
+function caBar(rate, target) {
+    const st = caStatus(rate, target);
+    const width = rate === null ? 0 : Math.max(0, Math.min(rate, 100));
+    return `<div class="ca-ratecell"><span>${caPct(rate)}</span><span class="ca-bar"><i class="${st.cls}" style="width:${width}%"></i></span></div>`;
+}
+
+function caChip(rate, target) {
+    const st = caStatus(rate, target);
+    return `<span class="ca-chip ${st.cls}">${st.label}</span>`;
+}
+
+function caRenderTable(tableKey) {
+    const cfg = caState.tables && caState.tables[tableKey];
+    if (!cfg) return;
+    const body = caEl(cfg.body);
+    if (!body) return;
+    const target = caTarget();
+    const q = (caEl(cfg.search)?.value || "").trim().toLowerCase();
+    const sort = caState.sort[tableKey];
+
+    let rows = cfg.rows.filter(r => !q || [r.name, r.part, r.description, r.line, r.customer].join(" ").toLowerCase().includes(q));
+
+    // hide rows with no schedule AND no dispatch
+    if (cfg.kind === "status" && caEl("companyHideNoSchedule")?.checked) {
+        rows = rows.filter(r => r.scheduled > 0 || r.dispatched > 0);
+    }
+
+    rows = rows.slice().sort((a, b) => {
+        const av = a[sort.key], bv = b[sort.key];
+        const cmp = typeof av === "string" || typeof bv === "string"
+            ? String(av ?? "").localeCompare(String(bv ?? ""))
+            : (av === null ? -Infinity : av) - (bv === null ? -Infinity : bv);
+        return sort.dir === "asc" ? cmp : -cmp;
+    });
+
+    // sort arrow on the active column
+    const keysByTable = {
+        line:     ["name", "scheduled", "dispatched", "rate", "rate"],
+        customer: ["name", "scheduled", "dispatched", "rate", "rate"],
+        parts:    ["part", "description", "line", "scheduled", "dispatched", "shortfall", "rate"]
+    };
+    let marked = false;
+    body.closest("table").querySelectorAll("thead th").forEach((th, i) => {
+        th.querySelector(".sort-arrow")?.remove();
+        if (!marked && keysByTable[tableKey][i] === sort.key) {
+            marked = true;
+            const a = document.createElement("span");
+            a.className = "sort-arrow";
+            a.style.marginLeft = "4px";
+            a.textContent = sort.dir === "asc" ? "▲" : "▼";
+            th.appendChild(a);
+        }
+    });
+
+    const cols = cfg.kind === "parts" ? 7 : 5;
+    if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="${cols}" class="ca-empty">${caEsc(cfg.empty)}</td></tr>`;
+        return;
+    }
+    body.innerHTML = rows.map(r => {
+        if (cfg.kind === "parts") {
+            return `<tr>
+                <td><strong>${caEsc(r.part || r.name)}</strong></td>
+                <td>${caEsc(r.description)}${r.customer ? `<br><small class="ca-sub">${caEsc(r.customer)}</small>` : ""}</td>
+                <td>${caEsc(r.line)}</td>
+                <td class="ca-num">${caFmt(r.scheduled)}</td>
+                <td class="ca-num">${caFmt(r.dispatched)}</td>
+                <td class="ca-num"><strong>${caFmt(r.shortfall)}</strong></td>
+                <td>${caBar(r.rate, target)}${caOverSuppliedChip(r.rate, target)}</td>
+            </tr>`;
+        }
+        return `<tr>
+            <td><strong>${caEsc(r.name)}</strong></td>
+            <td class="ca-num">${caFmt(r.scheduled)}</td>
+            <td class="ca-num">${caFmt(r.dispatched)}</td>
+            <td>${caBar(r.rate, target)}${caOverSuppliedChip(r.rate, target)}</td>
+            <td>${caChip(r.rate, target)}</td>
+        </tr>`;
+    }).join("");
+}
+
+/* click a column heading to sort */
+function caInitTableSorting() {
+    const map = {
+        companyByLineBody: ["name", "scheduled", "dispatched", "rate", "rate"],
+        companyByCustomerBody: ["name", "scheduled", "dispatched", "rate", "rate"],
+        companyShortfallBody: ["part", "description", "line", "scheduled", "dispatched", "shortfall", "rate"]
+    };
+    const tableOf = { companyByLineBody: "line", companyByCustomerBody: "customer", companyShortfallBody: "parts" };
+    Object.entries(map).forEach(([bodyId, keys]) => {
+        const body = caEl(bodyId);
+        const headers = body?.closest("table")?.querySelectorAll("thead th");
+        if (!headers) return;
+        headers.forEach((th, i) => {
+            th.style.cursor = "pointer";
+            th.title = "Click to sort";
+            th.addEventListener("click", () => {
+                const tk = tableOf[bodyId];
+                const cur = caState.sort[tk] || {};
+                caState.sort[tk] = { key: keys[i], dir: cur.key === keys[i] && cur.dir === "desc" ? "asc" : "desc" };
+                caRenderTable(tk);
+            });
+        });
+    });
+}
+
+function companyLineSearchHandler() { caRenderTable("line"); }
+function companyCustomerSearchHandler() { caRenderTable("customer"); }
+function companyShortfallSearchHandler() { caRenderTable("parts"); }
+
+/* ---------- data quality (collapsed by default) ---------- */
+function caRenderQuality(dq) {
+    const panel = caEl("companyDataQuality");
+    const list = caEl("companyQualityIssuesList");
+    const content = caEl("companyDataQualityContent");
+    if (!panel || !list || !content) return;
+
+    const issues = [];
+    Object.entries(dq || {}).forEach(([key, value]) => {
+        let items = [];
+        if (Array.isArray(value)) items = value;
+        else if (value && typeof value === "object") items = Object.entries(value).map(([k, v]) => `${k}: ${v}`);
+        else if (typeof value === "number" && value > 0) items = [`${value} row(s) affected`];
+        else if (value === true) items = ["yes"];
+        if (items.length) issues.push({ key, items });
+    });
+
+    if (!issues.length) { panel.style.display = "none"; return; }
+
+    const h3 = panel.querySelector("h3");
+    if (h3) h3.textContent = `Data Quality Note (${issues.length} issue${issues.length !== 1 ? "s" : ""})`;
+    content.querySelector("p")?.remove();               // "Loading..." text
+
+    const nice = k => k.replace(/([A-Z])/g, " $1").replace(/^./, c => c.toUpperCase());
+    const show = it => (it && typeof it === "object") ? Object.values(it).join(" | ") : String(it);
+    list.innerHTML = issues.map(i => `
+        <div class="ca-issue"><strong>${caEsc(nice(i.key))}</strong>
+            <span class="ca-chip ca-amber">${i.items.length}</span>
+            <ul>${i.items.slice(0, 8).map(it => `<li>${caEsc(show(it))}</li>`).join("")}</ul>
+            ${i.items.length > 8 ? `<small class="ca-sub">and ${i.items.length - 8} more</small>` : ""}
+        </div>`).join("");
+
+    panel.style.display = "block";
+    if (!panel.dataset.touched) {                       // start collapsed
+        content.style.display = "none";
+        const btn = panel.querySelector("button");
+        if (btn) btn.textContent = "▶";
+    }
+}
+
+function toggleCompanyHideNoSchedule() {
+    if (!caState.tables) return;
+    Object.keys(caState.tables).forEach(caRenderTable);
+    const checked = caEl("companyHideNoSchedule")?.checked;
+    const hidden = ["line", "customer"].reduce(
+    (n, k) => n + caState.tables[k].rows.filter(r => r.scheduled === 0 && r.dispatched === 0).length, 0);
+    const el = caEl("companyHiddenCount");
+    if (el) el.textContent = checked ? `${hidden} hidden` : "0 hidden";
+}
+
+function caStatusLabel(rate, target) {
+    if (rate === null || rate === undefined) return "N/A";
+    if (rate >= target) return "On target";
+    if (rate >= target - 10) return "Close";
+    return "Below target";
+}
+
+function toggleDataQuality() {
+    const panel = caEl("companyDataQuality");
+    const content = caEl("companyDataQualityContent");
+    if (!panel || !content) return;
+    panel.dataset.touched = "1";
+    const open = content.style.display === "none";
+    content.style.display = open ? "block" : "none";
+    const btn = panel.querySelector("button");
+    if (btn) btn.textContent = open ? "▼" : "▶";
+}
+
+/* ---------- CSV export ---------- */
+function caInstallExportButton() {
+    if (caEl("companyExportBtn")) return;
+    const host = caEl("companyActions");
+    if (!host) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "companyExportBtn";
+    btn.className = "btn-primary-sm";
+    btn.textContent = "⬇ Export CSV";
+    btn.addEventListener("click", exportCompanyAnalysisCsv);
+    host.appendChild(btn);
+}
+
+function exportCompanyAnalysisCsv() {
+    const tables = caState.tables;
+    if (!tables) { alert("Nothing to export yet. Open the tab and wait for the results."); return; }
+    const target = caTarget();
+    const q = v => `"${String(v ?? "").replace(/"/g, "\"\"")}"`;
+    const out = [];
+
+    const section = (title, header, rows) => {
+        out.push(q(title));
+        out.push(header.map(q).join(","));
+        rows.forEach(r => out.push(r.map(q).join(",")));
+        out.push("");
+    };
+    const byRate = r => (r.rate === null ? "N/A" : r.rate.toFixed(1) + "%");
+
+    section("Fill rate by product line", ["Product line", "Scheduled", "Dispatched", "Fill rate", "Status"],
+        tables.line.rows.map(r => [r.name, r.scheduled, r.dispatched, byRate(r), caStatus(r.rate, target).label]));
+    section("Fill rate by customer", ["Customer", "Scheduled", "Dispatched", "Fill rate", "Status"],
+        tables.customer.rows.map(r => [r.name, r.scheduled, r.dispatched, byRate(r), caStatus(r.rate, target).label]));
+    section("Top shortfall parts", ["Part no.", "Description", "Customer", "Line", "Scheduled", "Dispatched", "Shortfall", "Fill rate"],
+        tables.parts.rows.map(r => [r.part || r.name, r.description, r.customer, r.line, r.scheduled, r.dispatched, r.shortfall, byRate(r)]));
+
+    const blob = new Blob(["\uFEFF" + out.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `company-analysis-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
