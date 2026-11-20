@@ -816,56 +816,57 @@ function renderTrendChart() {
     panel.style.display = "block";
 
     const target = cmpTarget();
-    const W = 760, H = 300, pl = 58, pr = 46, pt = 28, pb = 44;
+    const W = 760, H = 250, pl = 44, pr = 12, pt = 12, pb = 66;
     const pw = W - pl - pr, ph = H - pt - pb;
-    const maxY = niceCeil(Math.max(...trend.flatMap(m => [m.actualCustomerSchedule, m.commitment, m.dispatched])));
-    const rateMax = 120;
+    const maxY = niceCeil(Math.max(1, ...trend.flatMap(m => [m.actualCustomerSchedule, m.commitment, m.dispatched])));
     const y = v => pt + ph - (v / maxY) * ph;
-    const yr = r => pt + ph - (Math.min(r, rateMax) / rateMax) * ph;
-    const slot = pw / trend.length, gw = Math.min(slot * 0.72, 150), bw = gw / 3;
+    const slot = pw / trend.length;
+    const gw = Math.min(slot * 0.62, 110), bw = gw / 3;
+    const axis = v => v >= 1000 ? `${+(v / 1000).toFixed(1)}k` : `${Math.round(v)}`;
 
-    const grid = [0, 0.25, 0.5, 0.75, 1].map(f => {
+    const grid = [0, 0.5, 1].map(f => {
         const v = maxY * f;
-        return `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" stroke="#e2e8f0"/>` +
-               `<text x="${pl - 8}" y="${y(v) + 4}" text-anchor="end">${formatNumber(v)}</text>`;
+        return `<line class="grid" x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}"/>` +
+               `<text x="${pl - 8}" y="${y(v) + 4}" text-anchor="end">${axis(v)}</text>`;
     }).join("");
-    const rateTicks = [0, 50, 100].map(r => `<text x="${W - pr + 8}" y="${yr(r) + 4}">${r}%</text>`).join("");
 
     const groups = trend.map((m, i) => {
         const cx = pl + slot * i + slot / 2, x0 = cx - gw / 2;
-        const bar = (v, cls, j) =>
-            `<rect class="${cls}" x="${x0 + bw * j}" y="${y(v)}" width="${bw - 2}" height="${Math.max(pt + ph - y(v), 0)}" rx="2"/>`;
-        const tip = `${m.label}\nCustomer demand: ${formatNumber(m.actualCustomerSchedule)}\nIFB commitment: ${formatNumber(m.commitment)}\nDispatched: ${formatNumber(m.dispatched)}\nFill rate vs commitment: ${m.fillRateVsCommitment ?? "n/a"}%`;
         const selected = m.month === cmpData.month;
-        return `<g class="cmp-month" data-month="${escapeHTML(m.month)}">
+        const st = cmpStatus(m.fillRateVsCommitment, target);
+        const rateText = m.fillRateVsCommitment == null ? "–" : `${m.fillRateVsCommitment.toFixed(1)}%`;
+        const bar = (v, cls, j) =>
+            `<rect class="${cls}" x="${x0 + bw * j + 1}" y="${y(v)}" width="${bw - 2}" height="${Math.max(pt + ph - y(v), 0)}" rx="2"/>`;
+        const tip = `${m.label}\nCustomer demand: ${formatNumber(m.actualCustomerSchedule)}\nIFB commitment: ${formatNumber(m.commitment)}\nDispatched: ${formatNumber(m.dispatched)}\nFill rate: ${rateText}`;
+        return `<g class="cmp-month${selected ? " is-selected" : ""}" data-month="${escapeHTML(m.month)}">
             <title>${escapeHTML(tip)}</title>
-            <rect class="${selected ? "sel-bg" : "hover-bg"}" x="${cx - slot / 2}" y="${pt}" width="${slot}" height="${ph}"/>
+            <rect class="slot-bg" x="${cx - slot / 2 + 2}" y="${pt}" width="${slot - 4}" height="${H - pt - 4}" rx="6"/>
             ${bar(m.actualCustomerSchedule, "bar-demand", 0)}${bar(m.commitment, "bar-commit", 1)}${bar(m.dispatched, "bar-disp", 2)}
-            <text x="${cx}" y="${H - pb + 20}" text-anchor="middle" font-weight="${selected ? 700 : 400}">${escapeHTML(m.label)}</text>
+            <text class="month-label" x="${cx}" y="${pt + ph + 18}" text-anchor="middle">${escapeHTML(m.label)}</text>
+            <rect class="chip-bg ${st.cls}" x="${cx - 27}" y="${pt + ph + 28}" width="54" height="20" rx="10"/>
+            <text class="chip-txt ${st.cls}" x="${cx}" y="${pt + ph + 42}" text-anchor="middle">${rateText}</text>
         </g>`;
     }).join("");
 
-    const pts = trend
-        .map((m, i) => m.fillRateVsCommitment == null ? null : [pl + slot * i + slot / 2, yr(m.fillRateVsCommitment), m.fillRateVsCommitment])
-        .filter(Boolean);
-    const path = pts.map((p, i) => `${i ? "L" : "M"}${p[0]},${p[1]}`).join(" ");
-    const dots = pts.map(p =>
-        `<circle class="dot-rate" cx="${p[0]}" cy="${p[1]}" r="4"/>` +
-        `<text class="rate-label" x="${p[0]}" y="${p[1] - 9}" text-anchor="middle">${p[2].toFixed(1)}%</text>`).join("");
+    const sel = trend.find(m => m.month === cmpData.month);
+    const summary = sel ? `<div class="cmp-summary">
+            <strong>${escapeHTML(sel.label)}</strong>
+            <span>Customer demand <b>${formatNumber(sel.actualCustomerSchedule)}</b></span>
+            <span>IFB commitment <b>${formatNumber(sel.commitment)}</b></span>
+            <span>Dispatched <b>${formatNumber(sel.dispatched)}</b></span>
+            <span>Fill rate <b>${sel.fillRateVsCommitment == null ? "–" : sel.fillRateVsCommitment.toFixed(1) + "%"}</b></span>
+        </div>` : "";
 
     box.innerHTML = `
-        <svg class="cmp-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly customer demand, IFB commitment and dispatch">
-            ${grid}${rateTicks}${groups}
-            <line class="target-line" x1="${pl}" x2="${W - pr}" y1="${yr(target)}" y2="${yr(target)}"/>
-            <text x="${W - pr - 4}" y="${yr(target) - 5}" text-anchor="end">Target ${target}%</text>
-            <path class="line-rate" d="${path}"/>${dots}
-        </svg>
         <div class="cmp-legend">
             <span><i class="lg bar-demand"></i>Customer demand</span>
             <span><i class="lg bar-commit"></i>IFB commitment</span>
             <span><i class="lg bar-disp"></i>Dispatched</span>
-            <span><i class="lg lg-line"></i>Fill rate vs commitment (right axis)</span>
-        </div>`;
+        </div>
+        <svg class="cmp-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly customer demand, IFB commitment and dispatch">
+            ${grid}${groups}
+        </svg>
+        ${summary}`;
     box.querySelectorAll("[data-month]").forEach(g =>
         g.addEventListener("click", () => selectTrendMonth(g.dataset.month)));
 }
@@ -1414,6 +1415,14 @@ function renderDashboardForCustomer(customer) {
 function filterMasterTable() {
     renderMasterRecordsTable();
 }
+function toggleRecordColumns() {
+    const on = !!document.getElementById("showAllColumns")?.checked;
+    document.querySelector(".master-records-table")?.classList.toggle("show-details", on);
+    const info = document.getElementById("recordsInfoGroup");
+    const ops = document.getElementById("recordsOpsGroup");
+    if (info) info.colSpan = on ? 8 : 4;   // the group headers must match the visible columns
+    if (ops) ops.colSpan = on ? 5 : 3;
+}
 
 function renderMasterRecordsTable() {
     const tbody = document.getElementById("masterRecordsBody");
@@ -1470,24 +1479,24 @@ function renderMasterRecordsTable() {
     const month2Key = shiftYearMonth(month1Key, 1);
     const month3Key = shiftYearMonth(month1Key, 2);
 
-    tbody.innerHTML = rows.map((r, displayIndex) => {
+        tbody.innerHTML = rows.map((r, displayIndex) => {
         const originalIndex = allScheduleRows.indexOf(r);
 
         return `
             <tr>
-                <td>${escapeHTML(r.serialNo || displayIndex + 1)}</td>
-                <td><strong>${escapeHTML(r.customerGroup || r.customer || "-")}</strong></td>
-                <td>${escapeHTML(r.customerCode || "-")}</td>
+                <td class="col-detail">${escapeHTML(r.serialNo || displayIndex + 1)}</td>
+                <td class="cell-trunc" title="${escapeHTML(r.customerGroup || r.customer || "")}"><strong>${escapeHTML(r.customerGroup || r.customer || "-")}</strong></td>
+                <td class="col-detail">${escapeHTML(r.customerCode || "-")}</td>
                 <td><span class="part-chip">${escapeHTML(r.partNo || "-")}</span></td>
-                <td>${escapeHTML(r.helper || "-")}</td>
-                <td>${escapeHTML(r.customerPartNo || "-")}</td>
+                <td class="col-detail">${escapeHTML(r.helper || "-")}</td>
+                <td class="col-detail">${escapeHTML(r.customerPartNo || "-")}</td>
                 <td>${escapeHTML(r.line || "-")}</td>
                 <td class="cell-trunc" title="${escapeHTML(r.productDescription || "")}">${escapeHTML(r.productDescription || "–")}</td>
                 <td class="num">${formatNumber(getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0))}</td>
                 <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0))}</td>
                 <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month3Key, 0))}</td>
-                <td>${escapeHTML(r.version || "Current")}</td>
-                <td>${escapeHTML(displayScheduleReceived(r))}</td>
+                <td class="col-detail">${escapeHTML(r.version || "Current")}</td>
+                <td class="col-detail">${escapeHTML(displayScheduleReceived(r))}</td>
                 <td class="num">${formatNumber(r.actualDispatch || 0)}</td>
                 <td class="num"><strong>${r.balance === null || r.balance === undefined ? "-" : formatNumber(r.balance)}</strong></td>
                 <td>
@@ -1775,6 +1784,14 @@ async function uploadExcel() {
 // INITIAL DATA LOADER
 // ==========================================================================
 
+function pickDefaultMonth(rows) {
+    const input = document.getElementById("dashboardMonth");
+    const months = new Set();
+    rows.forEach(r => Object.keys(r.monthlySchedules || {}).forEach(m => months.add(m)));
+    if (!input || !months.size || months.has(input.value)) return;
+    input.value = [...months].sort().pop();
+}
+
 async function loadDashboardData() {
     try {
         const response = await fetch(apiUrl("/dashboard"));
@@ -1802,9 +1819,11 @@ async function initApplication() {
     await loadDashboardData();
 
     await loadMasterData();
+    pickDefaultMonth(allScheduleRows); updateDashboardMonthLabels();
     activeCustomer = "ALL";
     renderDashboardForCustomer(activeCustomer);
     renderMasterRecordsTable();
+    toggleRecordColumns();
     loadImportedFilesList();
     loadComparisonMeta();
     switchTab("dashboard");

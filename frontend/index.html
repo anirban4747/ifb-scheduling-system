@@ -220,7 +220,6 @@
 
                     <div class="records-action-group">
                         <button type="button" class="btn-outline-sm" onclick="exportRecordsToCSV()">📥 Export to CSV</button>
-                        <a href="/api/sample-template" download class="btn-outline-sm">📑 Download Template</a>
                         <button type="button" class="btn-primary-sm" onclick="switchTab('upload')">+ Upload Schedule</button>
                     </div>
                 </div>
@@ -252,6 +251,7 @@
                             <option value="ALL">All months</option>
                         </select>
                     </div>
+                    <label class="col-toggle"><input type="checkbox" id="showAllColumns" onchange="toggleRecordColumns()"> Show all columns</label>
 
                     <div class="record-counter" id="recordCounterText">
                         Showing 0 records
@@ -262,31 +262,31 @@
                 <div class="table-responsive table-scroll">
                     <table class="data-table master-records-table">
                         <thead>
-                            <tr class="super-header-row">
-                                <th colspan="8" class="th-info-group">Part &amp; Customer Information</th>
-                                <th id="recordsFirmSuperHeader" class="th-firm-header">FIRM</th>
-                                <th colspan="2" class="th-tentative-super-header">TENTATIVE QTY</th>
-                                <th colspan="5" class="th-ops-header">Performance &amp; Status</th>
-                            </tr>
-                            <tr>
-                                <th>Sl No</th>
-                                <th>Customer</th>
-                                <th>Customer code</th>
-                                <th>PART No.</th>
-                                <th>Helper</th>
-                                <th>Customer Part No</th>
-                                <th>Line</th>
-                                <th>Description</th>
-                                <th id="recordsMonth1Label">Oct-26</th>
-                                <th id="recordsMonth2Label" class="th-tentative">Nov-26</th>
-                                <th id="recordsMonth3Label" class="th-tentative">Dec-26</th>
-                                <th>Version</th>
-                                <th>Schedule Received</th>
-                                <th>Actual Dispatch</th>
-                                <th>Backlog</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
+    <tr class="super-header-row">
+        <th colspan="4" id="recordsInfoGroup" class="th-info-group">Part &amp; Customer Information</th>
+        <th id="recordsFirmSuperHeader" class="th-firm-header">FIRM</th>
+        <th colspan="2" class="th-tentative-super-header">TENTATIVE QTY</th>
+        <th colspan="3" id="recordsOpsGroup" class="th-ops-header">Performance &amp; Status</th>
+    </tr>
+    <tr>
+        <th class="col-detail">Sl No</th>
+        <th>Customer</th>
+        <th class="col-detail">Customer code</th>
+        <th>PART No.</th>
+        <th class="col-detail">Helper</th>
+        <th class="col-detail">Customer Part No</th>
+        <th>Line</th>
+        <th>Description</th>
+        <th class="num" id="recordsMonth1Label">Oct-26</th>
+        <th class="num th-tentative" id="recordsMonth2Label">Nov-26</th>
+        <th class="num th-tentative" id="recordsMonth3Label">Dec-26</th>
+        <th class="col-detail">Version</th>
+        <th class="col-detail">Schedule Received</th>
+        <th class="num">Actual Dispatch</th>
+        <th class="num">Backlog</th>
+        <th>Actions</th>
+    </tr>
+</thead>
                         <tbody id="masterRecordsBody">
                             <!-- Populated dynamically -->
                         </tbody>
@@ -432,7 +432,7 @@
     <div class="panel-header-with-actions">
         <div>
             <h3>Monthly Trend</h3>
-            <p class="panel-subtitle">Customer demand vs IFB commitment vs dispatch. Click a month to select it.</p>
+            <p class="panel-subtitle">Click a month to select it. The chip under each month is dispatched ÷ commitment (green = at or above target).</p>
         </div>
         <label class="cmp-target">Target
             <input type="number" id="cmpTargetInput" min="50" max="100" value="95" onchange="renderTrendChart(); renderLineTable();"> %
