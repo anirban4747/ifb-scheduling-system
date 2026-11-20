@@ -97,13 +97,6 @@ function switchTab(tabId) {
     if (tabId === "upload") {
         loadImportedFilesList();
     }
-        if (tabId === "company-analysis") {
-        const tabAnalysis = document.getElementById("tab-analysis");
-        const tabCompanyAnalysis = document.getElementById("tab-company-analysis");
-        if (tabAnalysis) tabAnalysis.classList.remove("active");
-        if (tabCompanyAnalysis) tabCompanyAnalysis.classList.add("active");
-        refreshCompanyAnalysis();
-    }
 }
 
 // Live Clock
@@ -695,9 +688,10 @@ async function loadComparisonMeta(selectedSnapshotId) {
         const snapshots = meta.snapshots || [];
 
         const formatSnapOption = s => {
-            const label = `${s.date || ""} · ${s.source || "Sheet"} (${s.rowCount || 0} rows)`;
-            return `<option value="${escapeHTML(s.snapshotId)}">${escapeHTML(label)}</option>`;
-        };
+    const name = String(s.source || "Sheet").replace(/^Copy of\s+/i, "").replace(/\.(xlsx|xls|csv)$/i, "");
+    const label = `${s.date || ""} · ${name} (${s.rowCount || 0} rows)`;
+    return `<option value="${escapeHTML(s.snapshotId)}" title="${escapeHTML(label)}">${escapeHTML(label)}</option>`;
+};
 
         if (snapshots.length === 0) {
             const emptyOpt = `<option value="">No Excel sheets uploaded</option>`;
@@ -772,7 +766,166 @@ async function runStreamlinedAnalysis() {
         await runDiffSheetsStreamlined();
     }
 }
+let cmpData = null;
+let cmpLineSort = { key: "grossShortfall", dir: "desc" };
 
+function cmpTarget() {
+    const v = Number(document.getElementById("cmpTargetInput")?.value);
+    return Number.isFinite(v) && v >= 50 && v <= 100 ? v : 95;
+}
+
+function cmpStatus(rate, target) {
+    if (rate == null) return { cls: "st-grey", label: "n/a" };
+    if (rate >= target) return { cls: "st-green", label: "On target" };
+    if (rate >= target - 10) return { cls: "st-amber", label: "Close" };
+    return { cls: "st-red", label: "Below target" };
+}
+
+function rateCell(rate, st) {
+    if (rate == null) return `<span class="muted">–</span>`;
+    return `<div class="rate-cell"><span>${rate.toFixed(1)}%</span><span class="rate-bar"><i class="${st.cls}" style="width:${Math.min(rate, 100)}%"></i></span></div>`;
+}
+
+function niceCeil(v) {
+    const p = Math.pow(10, Math.floor(Math.log10(Math.max(v, 1))));
+    return Math.ceil(v / p) * p;
+}
+
+function hideCmpExtras() {
+    cmpData = null;
+    ["cmpTrendPanel", "cmpLinePanel", "cmpDataQuality"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = "none";
+    });
+}
+
+function selectTrendMonth(month) {
+    const sel = document.getElementById("sameMetricMonth");
+    if (sel && [...sel.options].some(o => o.value === month)) {
+        sel.value = month;
+        runStreamlinedAnalysis();
+    }
+}
+
+function renderTrendChart() {
+    const panel = document.getElementById("cmpTrendPanel");
+    const box = document.getElementById("cmpTrendChart");
+    if (!panel || !box) return;
+    const trend = cmpData?.monthlyTrend || [];
+    if (!trend.length) { panel.style.display = "none"; return; }
+    panel.style.display = "block";
+
+    const target = cmpTarget();
+    const W = 760, H = 300, pl = 58, pr = 46, pt = 28, pb = 44;
+    const pw = W - pl - pr, ph = H - pt - pb;
+    const maxY = niceCeil(Math.max(...trend.flatMap(m => [m.actualCustomerSchedule, m.commitment, m.dispatched])));
+    const rateMax = 120;
+    const y = v => pt + ph - (v / maxY) * ph;
+    const yr = r => pt + ph - (Math.min(r, rateMax) / rateMax) * ph;
+    const slot = pw / trend.length, gw = Math.min(slot * 0.72, 150), bw = gw / 3;
+
+    const grid = [0, 0.25, 0.5, 0.75, 1].map(f => {
+        const v = maxY * f;
+        return `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" stroke="#e2e8f0"/>` +
+               `<text x="${pl - 8}" y="${y(v) + 4}" text-anchor="end">${formatNumber(v)}</text>`;
+    }).join("");
+    const rateTicks = [0, 50, 100].map(r => `<text x="${W - pr + 8}" y="${yr(r) + 4}">${r}%</text>`).join("");
+
+    const groups = trend.map((m, i) => {
+        const cx = pl + slot * i + slot / 2, x0 = cx - gw / 2;
+        const bar = (v, cls, j) =>
+            `<rect class="${cls}" x="${x0 + bw * j}" y="${y(v)}" width="${bw - 2}" height="${Math.max(pt + ph - y(v), 0)}" rx="2"/>`;
+        const tip = `${m.label}\nCustomer demand: ${formatNumber(m.actualCustomerSchedule)}\nIFB commitment: ${formatNumber(m.commitment)}\nDispatched: ${formatNumber(m.dispatched)}\nFill rate vs commitment: ${m.fillRateVsCommitment ?? "n/a"}%`;
+        const selected = m.month === cmpData.month;
+        return `<g class="cmp-month" data-month="${escapeHTML(m.month)}">
+            <title>${escapeHTML(tip)}</title>
+            <rect class="${selected ? "sel-bg" : "hover-bg"}" x="${cx - slot / 2}" y="${pt}" width="${slot}" height="${ph}"/>
+            ${bar(m.actualCustomerSchedule, "bar-demand", 0)}${bar(m.commitment, "bar-commit", 1)}${bar(m.dispatched, "bar-disp", 2)}
+            <text x="${cx}" y="${H - pb + 20}" text-anchor="middle" font-weight="${selected ? 700 : 400}">${escapeHTML(m.label)}</text>
+        </g>`;
+    }).join("");
+
+    const pts = trend
+        .map((m, i) => m.fillRateVsCommitment == null ? null : [pl + slot * i + slot / 2, yr(m.fillRateVsCommitment), m.fillRateVsCommitment])
+        .filter(Boolean);
+    const path = pts.map((p, i) => `${i ? "L" : "M"}${p[0]},${p[1]}`).join(" ");
+    const dots = pts.map(p =>
+        `<circle class="dot-rate" cx="${p[0]}" cy="${p[1]}" r="4"/>` +
+        `<text class="rate-label" x="${p[0]}" y="${p[1] - 9}" text-anchor="middle">${p[2].toFixed(1)}%</text>`).join("");
+
+    box.innerHTML = `
+        <svg class="cmp-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly customer demand, IFB commitment and dispatch">
+            ${grid}${rateTicks}${groups}
+            <line class="target-line" x1="${pl}" x2="${W - pr}" y1="${yr(target)}" y2="${yr(target)}"/>
+            <text x="${W - pr - 4}" y="${yr(target) - 5}" text-anchor="end">Target ${target}%</text>
+            <path class="line-rate" d="${path}"/>${dots}
+        </svg>
+        <div class="cmp-legend">
+            <span><i class="lg bar-demand"></i>Customer demand</span>
+            <span><i class="lg bar-commit"></i>IFB commitment</span>
+            <span><i class="lg bar-disp"></i>Dispatched</span>
+            <span><i class="lg lg-line"></i>Fill rate vs commitment (right axis)</span>
+        </div>`;
+    box.querySelectorAll("[data-month]").forEach(g =>
+        g.addEventListener("click", () => selectTrendMonth(g.dataset.month)));
+}
+
+function sortCmpLines(key) {
+    cmpLineSort = { key, dir: cmpLineSort.key === key && cmpLineSort.dir === "desc" ? "asc" : "desc" };
+    renderLineTable();
+}
+
+function renderLineTable() {
+    const panel = document.getElementById("cmpLinePanel");
+    const body = document.getElementById("cmpLineBody");
+    const foot = document.getElementById("cmpLineFoot");
+    if (!panel || !body || !foot) return;
+    const lines = (cmpData?.byLine || []).slice();
+    if (!lines.length) { panel.style.display = "none"; return; }
+    panel.style.display = "block";
+
+    const target = cmpTarget();
+    const { key, dir } = cmpLineSort;
+    lines.sort((a, b) => {
+        const av = a[key], bv = b[key];
+        const cmp = typeof av === "string" ? av.localeCompare(bv) : (av ?? -Infinity) - (bv ?? -Infinity);
+        return dir === "asc" ? cmp : -cmp;
+    });
+
+    body.innerHTML = lines.map(l => {
+        const st = cmpStatus(l.fillRate, target);
+        return `<tr>
+            <td><strong>${escapeHTML(l.line)}</strong></td>
+            <td class="num">${formatNumber(l.commitment)}</td>
+            <td class="num">${formatNumber(l.dispatched)}</td>
+            <td>${rateCell(l.fillRate, st)}</td>
+            <td class="num neg">${l.grossShortfall ? "-" + formatNumber(l.grossShortfall) : "–"}</td>
+            <td><span class="chip ${st.cls}">${st.label}</span></td>
+        </tr>`;
+    }).join("");
+
+    const tc = lines.reduce((s, l) => s + l.commitment, 0);
+    const td = lines.reduce((s, l) => s + l.dispatched, 0);
+    const ts = lines.reduce((s, l) => s + l.grossShortfall, 0);
+    const rate = tc > 0 ? (td / tc) * 100 : null;
+    foot.innerHTML = `<tr class="total-row">
+        <td>Total</td><td class="num">${formatNumber(tc)}</td><td class="num">${formatNumber(td)}</td>
+        <td>${rateCell(rate, cmpStatus(rate, target))}</td>
+        <td class="num">${ts ? "-" + formatNumber(ts) : "–"}</td><td></td></tr>`;
+}
+
+function renderDataQualityNote() {
+    const el = document.getElementById("cmpDataQuality");
+    if (!el) return;
+    const dq = cmpData?.dataQuality || {};
+    const parts = [];
+    if (dq.blankLines) parts.push(`${dq.blankLines} parts have no Line`);
+    if (dq.numericLines) parts.push(`${dq.numericLines} have a part number in the Line column`);
+    if (dq.duplicateKeys) parts.push(`${dq.duplicateKeys} duplicate rows were merged`);
+    if (dq.unscheduledDispatchParts) parts.push(`${dq.unscheduledDispatchParts} parts shipped with no schedule`);
+    el.style.display = parts.length ? "block" : "none";
+    el.textContent = parts.length ? `⚠ Data check: ${parts.join(" · ")}` : "";
+}
 async function runSameSheetStreamlined() {
     const snapshotId = document.getElementById("sameSheetSelect")?.value;
     const view = document.getElementById("sameViewMode")?.value || "metrics";
@@ -808,6 +961,7 @@ async function runSameSheetStreamlined() {
         if (data.status !== "available") {
             if (takeawayEl) takeawayEl.textContent = data.message || "No data available for this selection.";
             if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">${escapeHTML(data.message)}</td></tr>`;
+            hideCmpExtras();
             return;
         }
 
@@ -822,14 +976,14 @@ async function runSameSheetStreamlined() {
             updateCard("card2Value", formatNumber(data.summary.totalB));
             updateCard("card2Detail", `Shipped Units (${data.monthLabel})`);
 
-            const diff = data.summary.netDiff;
-            updateCard("card3Title", "Delivery Shortfall");
-            updateCard("card3Value", diff < 0 ? `-${formatNumber(Math.abs(diff))}` : (diff > 0 ? `+${formatNumber(diff)}` : "0"));
-            updateCard("card3Detail", diff < 0 ? `Shortfall: ${formatNumber(data.summary.shortfallQty)} units` : "Fully met plan");
+            const s = data.summary;
+            updateCard("card3Title", "Shortfall vs Commitment");
+            updateCard("card3Value", s.grossShortfallQty > 0 ? `-${formatNumber(s.grossShortfallQty)}` : "0");
+            updateCard("card3Detail", `${s.partsShortfall} parts short · ${formatNumber(s.grossSurplusQty)} shipped above plan · net ${s.netDiff < 0 ? "-" : "+"}${formatNumber(Math.abs(s.netDiff))}`);
 
             updateCard("card4Title", "Fulfillment Rate");
-            updateCard("card4Value", `${data.summary.fulfillmentRate.toFixed(1)}%`);
-            updateCard("card4Detail", `${data.summary.partsFulfilled} of ${data.summary.partsTotal} parts on target`);
+            updateCard("card4Value", `${s.fulfillmentRate.toFixed(1)}%`);
+            updateCard("card4Detail", `${s.partsOnTarget} of ${s.partsOnTarget + s.partsShortfall} scheduled parts on target`);
 
             const titleEl = document.getElementById("comparisonTableTitle");
             const subEl = document.getElementById("comparisonTableSubtitle");
@@ -838,10 +992,9 @@ async function runSameSheetStreamlined() {
 
             setTableHeader("Committed Qty", "Dispatched Qty", "Difference", "Fulfillment %");
 
-            updateCountPill("countPillAll", data.summary.partsTotal);
-            updateCountPill("countPillInc", data.summary.partsSurplus);
-            updateCountPill("countPillDec", data.summary.partsShortfall);
-            updateCountPill("countPillUnchanged", data.summary.partsFulfilled);
+        
+
+            cmpData = data; renderTrendChart(); renderLineTable(); renderDataQualityNote();
         } else {
             updateCard("card1Title", `${data.labelA} Demand`);
             updateCard("card1Value", formatNumber(data.summary.totalA));
@@ -868,13 +1021,12 @@ async function runSameSheetStreamlined() {
 
             setTableHeader(`${data.labelA} Qty`, `${data.labelB} Qty`, "Difference (±)", "% Shift");
 
-            updateCountPill("countPillAll", data.summary.partsTotal);
-            updateCountPill("countPillInc", data.summary.partsIncreased);
-            updateCountPill("countPillDec", data.summary.partsDecreased);
-            updateCountPill("countPillUnchanged", data.summary.partsUnchanged);
+            
+            hideCmpExtras();
         }
 
         currentComparisonRows = data.rows || [];
+        refreshStatusCounts();
         renderComparisonTable();
     } catch (err) {
         console.error("runSameSheetStreamlined error:", err);
@@ -904,10 +1056,12 @@ async function runDiffSheetsStreamlined() {
         const data = await res.json();
 
         if (data.status !== "available") {
+            hideCmpExtras();
             if (takeawayEl) takeawayEl.textContent = data.message || "Comparison unavailable.";
             if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">${escapeHTML(data.message)}</td></tr>`;
             return;
         }
+        hideCmpExtras();
 
         if (takeawayEl) takeawayEl.textContent = data.summary.takeaway;
 
@@ -936,12 +1090,10 @@ async function runDiffSheetsStreamlined() {
 
         setTableHeader("Base Qty", "Compare Qty", "Difference (±)", "% Change");
 
-        updateCountPill("countPillAll", data.summary.partsTotal);
-        updateCountPill("countPillInc", data.summary.partsIncreased);
-        updateCountPill("countPillDec", data.summary.partsDecreased);
-        updateCountPill("countPillUnchanged", data.summary.partsUnchanged);
+    
 
         currentComparisonRows = data.rows || [];
+        refreshStatusCounts();
         renderComparisonTable();
     } catch (err) {
         console.error("runDiffSheetsStreamlined error:", err);
@@ -969,7 +1121,20 @@ function updateCountPill(id, count) {
     const el = document.getElementById(id);
     if (el) el.textContent = formatNumber(count || 0);
 }
+const STATUS_GROUP = {
+    increased: "increased", surplus: "increased", added: "increased", unscheduled: "increased",
+    decreased: "decreased", shortfall: "decreased", removed: "decreased",
+    unchanged: "unchanged", fulfilled: "unchanged"
+};
 
+function refreshStatusCounts() {
+    const c = { increased: 0, decreased: 0, unchanged: 0 };
+    currentComparisonRows.forEach(r => { const g = STATUS_GROUP[r.status]; if (g) c[g]++; });
+    updateCountPill("countPillAll", currentComparisonRows.length);
+    updateCountPill("countPillInc", c.increased);
+    updateCountPill("countPillDec", c.decreased);
+    updateCountPill("countPillUnchanged", c.unchanged);
+}
 function setComparisonStatusFilter(status) {
     currentComparisonFilter = status;
     document.querySelectorAll("#comparisonFilterPills .chip-filter").forEach(btn => {
@@ -992,14 +1157,7 @@ function renderComparisonTable() {
 
     let filtered = currentComparisonRows;
 
-    if (filter !== "all") {
-        filtered = filtered.filter(row => {
-            if (filter === "increased") return row.status === "increased" || row.status === "surplus" || row.status === "added";
-            if (filter === "decreased") return row.status === "decreased" || row.status === "shortfall" || row.status === "removed";
-            if (filter === "unchanged") return row.status === "unchanged" || row.status === "fulfilled";
-            return true;
-        });
-    }
+    if (filter !== "all") filtered = filtered.filter(r => STATUS_GROUP[r.status] === filter);
 
     if (query) {
         filtered = filtered.filter(row =>
@@ -1013,6 +1171,7 @@ function renderComparisonTable() {
 
     if (filtered.length === 0) {
         tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #94a3b8; padding: 24px;">No matching part records found.</td></tr>`;
+        const f = document.getElementById("comparisonTableFoot"); if (f) f.innerHTML = "";
         return;
     }
 
@@ -1024,7 +1183,6 @@ function renderComparisonTable() {
         const valA = row.baseQty ?? row.qtyA ?? 0;
         const valB = row.compareQty ?? row.qtyB ?? 0;
         const diff = row.change ?? row.diff ?? 0;
-        const pct = row.percentChange ?? row.fulfillmentRate ?? 0;
 
         if (row.status === "increased") {
             statusBadge = `<span class="badge-status-inc">Increased ↑</span>`;
@@ -1047,30 +1205,41 @@ function renderComparisonTable() {
         } else if (row.status === "fulfilled") {
             statusBadge = `<span class="badge-status-fulfilled">Fulfilled ✓</span>`;
             diffClass = "diff-neutral";
+        } else if (row.status === "unscheduled") {
+            statusBadge = `<span class="badge-status-new">Shipped, no schedule</span>`;
+            diffClass = "diff-positive";
         } else {
             statusBadge = `<span class="badge-status-same">Unchanged =</span>`;
             diffClass = "diff-neutral";
         }
 
         const diffDisplay = diff > 0 ? `+${formatNumber(diff)}` : formatNumber(diff);
-        const pctDisplay = isMetricsView
-            ? `${pct.toFixed(1)}%`
-            : `${diff > 0 ? "+" : ""}${pct.toFixed(1)}%`;
+        const pctRaw = row.percentChange ?? row.fulfillmentRate;
+        const pctDisplay = pctRaw == null ? "-"
+            : isMetricsView ? `${pctRaw.toFixed(1)}%`
+            : `${diff > 0 ? "+" : ""}${pctRaw.toFixed(1)}%`;
 
-        return `
-            <tr>
-                <td><strong>${escapeHTML(row.customer)}</strong></td>
-                <td><code>${escapeHTML(row.partNo)}</code></td>
-                <td>${escapeHTML(row.productDescription || "-")}</td>
-                <td>${escapeHTML(row.line || "-")}</td>
-                <td><strong>${formatNumber(valA)}</strong></td>
-                <td><strong>${formatNumber(valB)}</strong></td>
-                <td class="${diffClass}">${diffDisplay}</td>
-                <td class="${diffClass}">${pctDisplay}</td>
-                <td>${statusBadge}</td>
-            </tr>
-        `;
+        return `<tr>
+    <td class="cell-trunc" title="${escapeHTML(row.customer)}"><strong>${escapeHTML(row.customer)}</strong></td>
+    <td><span class="part-chip">${escapeHTML(row.partNo)}</span></td>
+    <td class="cell-trunc" title="${escapeHTML(row.productDescription || "")}">${escapeHTML(row.productDescription || "–")}</td>
+    <td>${escapeHTML(row.line || "–")}</td>
+    <td class="num">${formatNumber(valA)}</td>
+    <td class="num">${formatNumber(valB)}</td>
+    <td class="num ${diffClass}">${diffDisplay}</td>
+    <td class="num ${diffClass}">${pctDisplay}</td>
+    <td>${statusBadge}</td>
+</tr>`;
     }).join("");
+const foot = document.getElementById("comparisonTableFoot");
+if (foot) {
+    const tA = filtered.reduce((s, r) => s + (r.baseQty ?? r.qtyA ?? 0), 0);
+    const tB = filtered.reduce((s, r) => s + (r.compareQty ?? r.qtyB ?? 0), 0);
+    const tD = tB - tA;
+    foot.innerHTML = `<tr class="total-row"><td colspan="4">Total (${filtered.length} parts)</td>
+        <td class="num">${formatNumber(tA)}</td><td class="num">${formatNumber(tB)}</td>
+        <td class="num">${tD > 0 ? "+" : ""}${formatNumber(tD)}</td><td></td><td></td></tr>`;
+}
 }
 
 function exportComparisonToCSV() {
@@ -1211,14 +1380,14 @@ function renderDashboardForCustomer(customer) {
                     <td>${escapeHTML(r.serialNo || idx + 1)}</td>
                     <td><strong>${escapeHTML(r.customerGroup || r.customer || "-")}</strong></td>
                     <td>${escapeHTML(r.customerCode || "-")}</td>
-                    <td>${escapeHTML(r.partNo || "-")}</td>
+                    <td><span class="part-chip">${escapeHTML(r.partNo || "-")}</span></td>
                     <td>${escapeHTML(r.helper || "-")}</td>
                     <td>${escapeHTML(r.customerPartNo || "-")}</td>
                     <td>${escapeHTML(r.line || "-")}</td>
-                    <td>${escapeHTML(r.productDescription || "-")}</td>
-                    <td><strong>${formatNumber(getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0))}</strong></td>
-                    <td style="background: #fefce8; color: #854d0e;">${formatNumber(getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0))}</td>
-                    <td style="background: #fefce8; color: #854d0e;">${formatNumber(getMonthlyScheduleQuantity(r, month3Key, 0))}</td>
+                    <td class="cell-trunc" title="${escapeHTML(r.productDescription || "")}">${escapeHTML(r.productDescription || "–")}</td>
+                    <td class="num">${formatNumber(getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0))}</td>
+                    <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0))}</td>
+                    <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month3Key, 0))}</td>
                 </tr>
             `).join("");
         }
@@ -1309,18 +1478,18 @@ function renderMasterRecordsTable() {
                 <td>${escapeHTML(r.serialNo || displayIndex + 1)}</td>
                 <td><strong>${escapeHTML(r.customerGroup || r.customer || "-")}</strong></td>
                 <td>${escapeHTML(r.customerCode || "-")}</td>
-                <td>${escapeHTML(r.partNo || "-")}</td>
+                <td><span class="part-chip">${escapeHTML(r.partNo || "-")}</span></td>
                 <td>${escapeHTML(r.helper || "-")}</td>
                 <td>${escapeHTML(r.customerPartNo || "-")}</td>
                 <td>${escapeHTML(r.line || "-")}</td>
-                <td>${escapeHTML(r.productDescription || "-")}</td>
-                <td><strong>${formatNumber(getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0))}</strong></td>
-                <td style="background: #fefce8; color: #854d0e;">${formatNumber(getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0))}</td>
-                <td style="background: #fefce8; color: #854d0e;">${formatNumber(getMonthlyScheduleQuantity(r, month3Key, 0))}</td>
+                <td class="cell-trunc" title="${escapeHTML(r.productDescription || "")}">${escapeHTML(r.productDescription || "–")}</td>
+                <td class="num">${formatNumber(getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0))}</td>
+                <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0))}</td>
+                <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month3Key, 0))}</td>
                 <td>${escapeHTML(r.version || "Current")}</td>
                 <td>${escapeHTML(displayScheduleReceived(r))}</td>
-                <td>${formatNumber(r.actualDispatch || 0)}</td>
-                <td><strong>${r.balance === null || r.balance === undefined ? "-" : formatNumber(r.balance)}</strong></td>
+                <td class="num">${formatNumber(r.actualDispatch || 0)}</td>
+                <td class="num"><strong>${r.balance === null || r.balance === undefined ? "-" : formatNumber(r.balance)}</strong></td>
                 <td>
                     <button class="btn-action-icon btn-delete-row" onclick="deleteScheduleRow(${originalIndex})" title="Delete entry">🗑️</button>
                 </td>
@@ -1366,20 +1535,14 @@ function exportRecordsToCSV() {
 
         allScheduleRows.forEach((r, idx) => {
         csvRows.push([
-            `"${r.serialNo || idx + 1}"`,
-            `"${r.customerGroup || r.customer || ''}"`,
-            `"${r.customerCode || ''}"`,
-            `"${r.partNo || ''}"`,
-            `"${r.helper || ''}"`,
-            `"${r.customerPartNo || ''}"`,
-            `"${r.line || ''}"`,
-            `"${r.productDescription || ''}"`,
-            getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0),
-            getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0),
-            getMonthlyScheduleQuantity(r, month3Key, 0),
-            r.version || "Current", r.scheduleReceivedDate, r.actualDispatch || 0,
-            r.balance, r.importedAt, r.source
-        ].map(csvCell).join(","));
+    r.serialNo || idx + 1, r.customerGroup || r.customer, r.customerCode,
+    r.partNo, r.helper, r.customerPartNo, r.line, r.productDescription,
+    getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0),
+    getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0),
+    getMonthlyScheduleQuantity(r, month3Key, 0),
+    r.version || "Current", r.scheduleReceivedDate, r.actualDispatch || 0,
+    r.balance, r.importedAt, r.source
+].map(csvCell).join(","));
     });
 
     const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -1630,6 +1793,7 @@ async function loadDashboardData() {
 }
 
 async function initApplication() {
+    try { localStorage.removeItem("company-analysis-filter-state"); } catch (e) {}
     document.querySelectorAll('a[href="/api/sample-template"]').forEach(a => { a.href = apiUrl("/api/sample-template"); });
     startClock();
     initializeSnapshotDate();
@@ -1648,673 +1812,3 @@ async function initApplication() {
 
 document.addEventListener("DOMContentLoaded", initApplication);
 
-const caState = {
-    token: 0,          // ignores out-of-date responses
-    first: true,       // first successful load fills the dropdowns
-    data: null,
-    sort: {},          // per-table sort: { line: {key, dir}, ... }
-    nf: new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }),
-    // Persisted filter state (localStorage, wrapped in try/catch)
-    persist: {
-        key: "company-analysis-filter-state",
-        get() {
-            try {
-                const raw = localStorage.getItem(this.key);
-                return raw ? JSON.parse(raw) : null;
-            } catch (e) {
-                return null;
-            }
-        },
-        set(filters) {
-            try {
-                localStorage.setItem(this.key, JSON.stringify(filters));
-            } catch (e) { /* ignore storage full / private mode */ }
-        }
-    }
-};
-
-/* ---------- small helpers ---------- */
-function caEl(id) { return document.getElementById(id); }
-
-function caPersistSave() {
-    caState.persist.set({
-        customer: caEl("companyCustomerSelect")?.value,
-        line: caEl("companyLineSelect")?.value,
-        fromMonth: caEl("companyFromMonth")?.value,
-        toMonth: caEl("companyToMonth")?.value,
-        target: caTarget()
-    });
-}
-
-/* returns true if any control was changed (so the caller can re-fetch) */
-function caPersistRestore() {
-    const sel = caState.persist.get();
-    if (!sel) return false;
-    let changed = false;
-    const setIf = (id, value) => {
-        const el = caEl(id);
-        if (value && el && [...el.options].some(o => o.value === value) && el.value !== value) {
-            el.value = value;
-            changed = true;
-        }
-    };
-    setIf("companyCustomerSelect", sel.customer);
-    setIf("companyLineSelect", sel.line);
-    setIf("companyFromMonth", sel.fromMonth);
-    setIf("companyToMonth", sel.toMonth);
-    const t = caEl("companyTargetInput");
-    if (sel.target !== undefined && t && t.value !== String(sel.target)) {
-        t.value = String(sel.target);
-        changed = true;
-    }
-    return changed;
-}
-
-function caTarget() {
-    const input = caEl("companyTargetInput");
-    if (!input) return 95;
-    const v = Number(input.value);
-    return Number.isFinite(v) && v >= 50 && v <= 100 ? v : 95;
-}
-
-/* ---------- trend chart: label-safe rendering ---------- */
-function caEsc(value) {
-    return String(value ?? "").replace(/[&<>"']/g, ch => (
-        { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]
-    ));
-}
-
-function caNum(value) {
-    if (value === null || value === undefined || value === "") return null;
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
-}
-
-function caPick(obj, keys) {
-    if (!obj) return undefined;
-    for (const k of keys) {
-        if (obj[k] !== undefined && obj[k] !== null) return obj[k];
-    }
-    return undefined;
-}
-
-function caFmt(n) { return n === null || n === undefined ? "N/A" : caState.nf.format(n); }
-function caPct(n) { return n === null || n === undefined ? "N/A" : n.toFixed(1) + "%"; }
-
-function caMonthLabel(key) {
-    const m = /^(\d{4})-(\d{2})$/.exec(String(key));
-    if (!m) return String(key);
-    const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return `${names[Number(m[2]) - 1] || m[2]} ${m[1]}`;
-}
-
-/* the API may return arrays or objects keyed by name; accept both */
-function caRows(x) {
-    if (Array.isArray(x)) return x;
-    if (x && typeof x === "object") return Object.entries(x).map(([k, v]) => ({ ...(v || {}), __key: k }));
-    return [];
-}
-
-function caNorm(row, nameKeys) {
-    const scheduled = caNum(caPick(row, ["scheduled", "scheduledQty", "schedule", "basisQty"]));
-    const dispatched = caNum(caPick(row, ["dispatched", "dispatchedQty", "dispatch", "dispatchQty"]));
-    let rate = scheduled && scheduled > 0 && dispatched !== null ? (dispatched / scheduled) * 100 : null;
-    if (rate === null && scheduled === null) rate = caNum(caPick(row, ["fillRate", "fillRatePct"]));
-    let shortfall = caNum(caPick(row, ["shortfall", "shortfallQty"]));
-    if (shortfall === null && scheduled !== null && dispatched !== null) shortfall = Math.max(scheduled - dispatched, 0);
-    return {
-        name: String(caPick(row, nameKeys) ?? row.__key ?? ""),
-        part: String(caPick(row, ["partNo", "part", "partNumber"]) ?? ""),
-        description: String(caPick(row, ["description", "desc"]) ?? ""),
-        line: String(caPick(row, ["line", "productLine"]) ?? ""),
-        customer: String(caPick(row, ["customer", "customerName"]) ?? ""),
-        scheduled: scheduled ?? 0,
-        dispatched: dispatched ?? 0,
-        shortfall: shortfall ?? 0,
-        surplus: caNum(caPick(row, ["surplus", "surplusQty"])),
-        rate,
-        raw: row
-    };
-}
-
-/* green >= target, amber within 10 points below, red otherwise */
-function caStatus(rate, target) {
-    if (rate === null || rate === undefined) return { cls: "ca-grey", label: "N/A" };
-    if (rate >= target) return { cls: "ca-green", label: "On target" };
-    if (rate >= target - 10) return { cls: "ca-amber", label: "Close" };
-    return { cls: "ca-red", label: "Below target" };
-}
-
-/* ---------- dropdown handling ---------- */
-function caFillSelect(select, values, labelFn, keepAll) {
-    if (!select) return;
-    const current = select.value;
-    const options = keepAll ? [`<option value="ALL">${select.id === "companyCustomerSelect" ? "All Customers" : "All Lines"}</option>`] : [];
-    values.forEach(v => options.push(`<option value="${caEsc(v)}">${caEsc(labelFn ? labelFn(v) : v)}</option>`));
-    select.innerHTML = options.join("");
-    if ([...select.options].some(o => o.value === current)) select.value = current;
-}
-
-function caAddMissingOptions(select, values) {
-    if (!select) return;
-    const have = new Set([...select.options].map(o => o.value));
-    values.forEach(v => {
-        if (v && !have.has(v)) {
-            const opt = document.createElement("option");
-            opt.value = v;
-            opt.textContent = v;
-            select.appendChild(opt);
-        }
-    });
-}
-
-/* ---------- visibility ---------- */
-function caShowResults(show) {
-    const kpi = caEl("companyKpiStrip");
-    if (kpi) kpi.style.display = show ? "grid" : "none";
-    ["companyMonthlyTrend", "companyByLineTable", "companyByCustomerTable", "companyShortfallPartsTable", "companyKeyFindings"].forEach(id => {
-        const el = caEl(id);
-        if (el) el.style.display = show ? "block" : "none";
-    });
-    if (!show) {
-        const dq = caEl("companyDataQuality");
-        if (dq) dq.style.display = "none";
-    }
-}
-
-/* ---------- monthly trend table under chart ---------- */
-function caRenderTrendTable(months, target) {
-    const box = caEl("companyMonthlyTrend");
-    if (!box) return;
-    if (!months.length) return;
-    const thead = `
-        <tr>
-            <th>Month</th>
-            <th>Scheduled</th>
-            <th>Dispatched</th>
-            <th>Shortfall</th>
-            <th>Fill Rate</th>
-        </tr>`;
-    const tbody = months.map(m => {
-        var ratePct = m.rate !== null ? m.rate.toFixed(1) + "%" : "N/A";
-        var shortfall = m.shortfall;
-        return `<tr>
-            <td>${caMonthLabel(m.name)}</td>
-            <td>${caFmt(m.scheduled)}</td>
-            <td>${caFmt(m.dispatched)}</td>
-            <td>${caFmt(shortfall)}</td>
-            <td>${ratePct}</td>
-        </tr>`;
-    }).join("");
-    var table = document.createElement("table");
-    table.className = "data-table";
-    table.innerHTML = thead + tbody;
-    // Insert below the SVG chart
-    var svg = box.querySelector("svg.ca-trend");
-    if (svg) { box.insertBefore(table, svg.nextSibling); }
-    else { box.appendChild(table); }
-}
-
-/* ---------- main entry point (called by switchTab and the filters) ---------- */
-async function refreshCompanyAnalysis() {
-    if (!caEl("tab-company-analysis")) return;
-    const token = ++caState.token;
-    const loading = caEl("companyLoading");
-    const errBox = caEl("companyError");
-    const emptyBox = caEl("companyEmpty");
-
-    loading.style.display = "flex";
-    errBox.style.display = "none";
-    emptyBox.style.display = "none";
-    caShowResults(false);
-    caInstallExportButton();
-
-    try {
-        const params = new URLSearchParams();
-        const customer = caEl("companyCustomerSelect")?.value;
-        const line = caEl("companyLineSelect")?.value;
-        if (customer && customer !== "ALL") params.set("customer", customer);
-        if (line && line !== "ALL") params.set("line", line);
-        params.set("basis", caEl("companyBasisSelect")?.value || "schedule");
-        params.set("target", String(caTarget()));
-
-        if (!caState.first) {
-            let from = caEl("companyFromMonth")?.value;
-            let to = caEl("companyToMonth")?.value;
-            if (from && to && from > to) {            // keep the range valid
-                [from, to] = [to, from];
-                caEl("companyFromMonth").value = from;
-                caEl("companyToMonth").value = to;
-            }
-            if (from) params.set("fromMonth", from);
-            if (to) params.set("toMonth", to);
-            caPersistSave();
-        }
-
-        const res = await fetch(apiUrl(`/analytics/company-fulfillment?${params.toString()}`));
-        if (!res.ok) throw new Error(`Server answered HTTP ${res.status}`);
-        let data = await res.json();
-        if (data && data.overall === undefined && data.data) data = data.data;   // unwrap { data: {...} }
-        if (token !== caState.token) return;                                      // a newer request is running
-
-        window.__companyData = data;
-        caState.data = data;
-        caRenderAll(data);
-    } catch (err) {
-        if (token !== caState.token) return;
-        console.error("Company analysis failed:", err);
-        loading.style.display = "none";
-        let detail = errBox.querySelector(".ca-err-detail");
-        if (!detail) {
-            detail = document.createElement("div");
-            detail.className = "ca-err-detail";
-            errBox.insertBefore(detail, errBox.querySelector("button"));
-        }
-        detail.textContent = `Reason: ${err.message}. Check that the server is running and that an Excel file has been uploaded.`;
-        errBox.style.display = "block";
-    }
-}
-
-function caRenderAll(data) {
-    const loading = caEl("companyLoading");
-    const emptyBox = caEl("companyEmpty");
-    const target = caTarget();
-
-    const months = caRows(data.byMonth).map(r => caNorm(r, ["month", "monthKey", "name"])).sort((a, b) => a.name.localeCompare(b.name));
-    const lines = caRows(data.byLine).map(r => caNorm(r, ["line", "productLine", "name"]));
-    const customers = caRows(data.byCustomer).map(r => caNorm(r, ["customer", "customerName", "name"]));
-    const parts = caRows(data.topShortfallParts).map(r => caNorm(r, ["partNo", "part", "name"]));
-    const overall = caNorm(data.overall || {}, ["name"]);
-
-    loading.style.display = "none";
-
-    const hasData = months.length || lines.length || customers.length || overall.scheduled > 0;
-    if (!hasData) {
-        emptyBox.style.display = "block";
-        return;
-    }
-
-    /* dropdowns: first load builds them from the data, later loads only add what is new */
-    if (caState.first) {
-        const monthKeys = months.map(m => m.name);
-        caFillSelect(caEl("companyFromMonth"), monthKeys, caMonthLabel, false);
-        caFillSelect(caEl("companyToMonth"), monthKeys, caMonthLabel, false);
-        if (monthKeys.length) {
-            caEl("companyFromMonth").value = monthKeys[0];
-            caEl("companyToMonth").value = monthKeys[monthKeys.length - 1];
-        }
-        caFillSelect(caEl("companyCustomerSelect"), customers.map(c => c.name).sort(), null, true);
-        caFillSelect(caEl("companyLineSelect"), lines.map(l => l.name).sort(), null, true);
-        caInitTableSorting();
-        caState.first = false;
-        if (caPersistRestore()) { refreshCompanyAnalysis(); return; }   // re-fetch with saved filters
-    } else {
-        caAddMissingOptions(caEl("companyCustomerSelect"), customers.map(c => c.name));
-        caAddMissingOptions(caEl("companyLineSelect"), lines.map(l => l.name));
-    }
-
-    const label = caPick(data, ["snapshotLabel", "snapshotName", "snapshotId"]);
-    if (typeof label === "string" && caEl("companySnapshotLabel")) caEl("companySnapshotLabel").textContent = label;
-
-    caShowResults(true);
-    caRenderKpis(overall, data.overall || {}, target);
-    caRenderTrend(months, target);
-    caRenderTrendTable(months, target);
-
-    caState.tables = {
-        line: { rows: lines, body: "companyByLineBody", search: "companyLineSearch", kind: "status", empty: "No product lines for these filters." },
-        customer: { rows: customers, body: "companyByCustomerBody", search: "companyCustomerSearch", kind: "status", empty: "No customers for these filters." },
-        parts: { rows: parts, body: "companyShortfallBody", search: "companyShortfallSearch", kind: "parts", empty: "No shortfall parts for these filters." }
-    };
-    caState.sort.line = caState.sort.line || { key: "scheduled", dir: "desc" };
-    caState.sort.customer = caState.sort.customer || { key: "scheduled", dir: "desc" };
-    caState.sort.parts = caState.sort.parts || { key: "shortfall", dir: "desc" };
-    toggleCompanyHideNoSchedule();
-
-    caRenderQuality(data.dataQuality);
-
-    /* key findings strip */
-    caRenderKeyFindings({ months, lines, customers, parts });
-}
-
-/* ---------- key findings strip ---------- */
-function caRenderKeyFindings({ lines, customers }) {
-    const el = caEl("companyKeyFindings");
-    if (!el) return;
-    const findings = [];
-
-    const rated = lines.filter(l => l.rate !== null && l.scheduled > 0);
-    if (rated.length) {
-        const low = rated.reduce((a, b) => (b.rate < a.rate ? b : a));
-        if (low.rate < 100) findings.push(`Lowest fill rate: ${low.name || "Unassigned"} at ${low.rate.toFixed(1)}%`);
-    }
-
-    const big = customers.reduce((a, b) => (b.shortfall > (a ? a.shortfall : 0) ? b : a), null);
-    if (big && big.shortfall > 0) findings.push(`Largest shortfall: ${big.name} (${caFmt(big.shortfall)} units)`);
-
-    const under10 = customers.filter(c => c.rate !== null && c.scheduled > 0 && c.rate < 10).length;
-    if (under10) findings.push(`${under10} customer${under10 > 1 ? "s" : ""} under 10% fill rate`);
-
-    const unassigned = lines.filter(l => !l.name || l.name === "Unassigned" || l.name === "Uncategorized").length;
-    if (unassigned) findings.push(`${unassigned} uncategorized line${unassigned > 1 ? "s" : ""}`);
-    const numericLines = lines.filter(l => /^\d+$/.test(l.name)).length;
-    if (numericLines) findings.push(`${numericLines} line name${numericLines > 1 ? "s look" : " looks"} like part numbers`);
-
-    if (!findings.length) findings.push("Analysis based on available schedule data");
-
-    el.innerHTML = `<span class="strip-label">Key findings:</span>` +
-        findings.slice(0, 4).map(f => `<span class="strip-finding">• ${caEsc(f)}</span>`).join("");
-    el.style.display = "flex";
-}
-/* status chip for over-supplied */
-function caOverSuppliedChip(rate, target) {
-    if (rate === null || rate === undefined || rate <= target) return "";
-    if (rate >= target + 10) return `<span class="ca-chip ca-amber">Over-supplied</span>`;
-    return "";
-}
-
-/* ---------- KPI strip ---------- */
-function caRenderKpis(overall, rawOverall, target) {
-    const set = (id, text) => { const el = caEl(id); if (el) el.textContent = text; };
-    const rateStatus = caStatus(overall.rate, target);
-    const overSupplied = overall.rate !== null && overall.rate > target + 10 ? "Over-supplied" : "";
-
-    set("companyOverallFillRate", caPct(overall.rate));
-    const detailEl = caEl("companyOverallFillRateDetail");
-    if (detailEl) {
-        detailEl.textContent = `${caFmt(overall.dispatched)} dispatched of ${caFmt(overall.scheduled)} scheduled`;
-        if (overSupplied) {
-            const chip = document.createElement("span");
-            chip.className = "ca-chip ca-amber";
-            chip.style.marginLeft = "6px";
-            chip.textContent = "Over-supplied";
-            detailEl.appendChild(chip);
-        }
-    }
-    const rateEl = caEl("companyOverallFillRate");
-    if (rateEl) rateEl.className = "s-kpi-value ca-text-" + rateStatus.cls.replace("ca-", "");
-
-    set("companyTotalShortfall", caFmt(overall.shortfall));
-    set("companyTotalShortfallDetail", "Units not shipped, counted part by part and month by month");
-
-    const surplus = overall.surplus !== null ? overall.surplus : caNum(caPick(rawOverall, ["surplus"]));
-    set("companySurplus", caFmt(surplus));
-    set("companySurplusDetail", "Shipped above the schedule (not subtracted from shortfall)");
-
-    const partsBelow = caNum(caPick(rawOverall, ["partsBelowTarget", "partsBelow"]));
-    const custBelow = caNum(caPick(rawOverall, ["customersBelowTarget", "customersBelow"]));
-    set("companyPartsBelowTarget", caFmt(partsBelow));
-    set("companyCustomersBelowTarget", caFmt(custBelow));
-    set("companyBelowTargetDetail", `Fill rate under ${target}% (parts / customers)`);
-}
-
-/* ---------- monthly trend (inline SVG, no libraries) ---------- */
-function caRenderTrend(months, target) {
-    const box = caEl("companyMonthlyTrend");
-    if (!box) return;
-    if (!months.length) {
-        box.innerHTML = `<div class="ca-empty">No monthly data for these filters.</div>`;
-        return;
-    }
-    const W = 720, H = 250, padL = 44, padR = 16, padT = 28, padB = 44;
-    const plotW = W - padL - padR, plotH = H - padT - padB;
-    const maxV = Math.max(100, target, ...months.map(m => m.rate || 0));
-    const y = v => padT + plotH - (v / maxV) * plotH;
-    const slot = plotW / months.length;
-    const bw = Math.min(64, slot * 0.6);
-
-    const ticks = [0, 25, 50, 75, 100].filter(t => t <= maxV);
-    const grid = ticks.map(t =>
-        `<line x1="${padL}" x2="${W - padR}" y1="${y(t)}" y2="${y(t)}" class="ca-grid"/>` +
-        `<text x="${padL - 8}" y="${y(t) + 4}" text-anchor="end" class="ca-axis">${t}%</text>`).join("");
-
-    const bars = months.map((m, i) => {
-        const cx = padL + slot * i + slot / 2;
-        const rate = m.rate === null ? 0 : m.rate;
-        const st = caStatus(m.rate, target);
-        const top = y(rate);
-        return `<g>
-            <title>${caEsc(caMonthLabel(m.name))}: ${caFmt(m.dispatched)} of ${caFmt(m.scheduled)} (${caPct(m.rate)})</title>
-            <rect x="${cx - bw / 2}" y="${top}" width="${bw}" height="${Math.max(padT + plotH - top, 1)}" rx="3" class="ca-svgbar ${st.cls}"/>
-            <text x="${cx}" y="${top - 6}" text-anchor="middle" class="ca-barlabel">${caPct(m.rate)}</text>
-            <text x="${cx}" y="${H - padB + 18}" text-anchor="middle" class="ca-axis">${caEsc(caMonthLabel(m.name))}</text>
-        </g>`;
-    }).join("");
-
-    box.innerHTML = `
-        <div class="panel-header-with-actions">
-            <h3>Monthly Fill Rate</h3>
-            <small>Dispatched divided by scheduled. Dashed line is the ${target}% target.</small>
-        </div>
-        <svg class="ca-trend" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly fill rate">
-            ${grid}
-            ${bars}
-            <line x1="${padL}" x2="${W - padR}" y1="${y(target)}" y2="${y(target)}" class="ca-target"/>
-        </svg>`;
-}
-
-/* ---------- tables ---------- */
-function caBar(rate, target) {
-    const st = caStatus(rate, target);
-    const width = rate === null ? 0 : Math.max(0, Math.min(rate, 100));
-    return `<div class="ca-ratecell"><span>${caPct(rate)}</span><span class="ca-bar"><i class="${st.cls}" style="width:${width}%"></i></span></div>`;
-}
-
-function caChip(rate, target) {
-    const st = caStatus(rate, target);
-    return `<span class="ca-chip ${st.cls}">${st.label}</span>`;
-}
-
-function caRenderTable(tableKey) {
-    const cfg = caState.tables && caState.tables[tableKey];
-    if (!cfg) return;
-    const body = caEl(cfg.body);
-    if (!body) return;
-    const target = caTarget();
-    const q = (caEl(cfg.search)?.value || "").trim().toLowerCase();
-    const sort = caState.sort[tableKey];
-
-    let rows = cfg.rows.filter(r => !q || [r.name, r.part, r.description, r.line, r.customer].join(" ").toLowerCase().includes(q));
-
-    // hide rows with no schedule AND no dispatch
-    if (cfg.kind === "status" && caEl("companyHideNoSchedule")?.checked) {
-        rows = rows.filter(r => r.scheduled > 0 || r.dispatched > 0);
-    }
-
-    rows = rows.slice().sort((a, b) => {
-        const av = a[sort.key], bv = b[sort.key];
-        const cmp = typeof av === "string" || typeof bv === "string"
-            ? String(av ?? "").localeCompare(String(bv ?? ""))
-            : (av === null ? -Infinity : av) - (bv === null ? -Infinity : bv);
-        return sort.dir === "asc" ? cmp : -cmp;
-    });
-
-    // sort arrow on the active column
-    const keysByTable = {
-        line:     ["name", "scheduled", "dispatched", "rate", "rate"],
-        customer: ["name", "scheduled", "dispatched", "rate", "rate"],
-        parts:    ["part", "description", "line", "scheduled", "dispatched", "shortfall", "rate"]
-    };
-    let marked = false;
-    body.closest("table").querySelectorAll("thead th").forEach((th, i) => {
-        th.querySelector(".sort-arrow")?.remove();
-        if (!marked && keysByTable[tableKey][i] === sort.key) {
-            marked = true;
-            const a = document.createElement("span");
-            a.className = "sort-arrow";
-            a.style.marginLeft = "4px";
-            a.textContent = sort.dir === "asc" ? "▲" : "▼";
-            th.appendChild(a);
-        }
-    });
-
-    const cols = cfg.kind === "parts" ? 7 : 5;
-    if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="${cols}" class="ca-empty">${caEsc(cfg.empty)}</td></tr>`;
-        return;
-    }
-    body.innerHTML = rows.map(r => {
-        if (cfg.kind === "parts") {
-            return `<tr>
-                <td><strong>${caEsc(r.part || r.name)}</strong></td>
-                <td>${caEsc(r.description)}${r.customer ? `<br><small class="ca-sub">${caEsc(r.customer)}</small>` : ""}</td>
-                <td>${caEsc(r.line)}</td>
-                <td class="ca-num">${caFmt(r.scheduled)}</td>
-                <td class="ca-num">${caFmt(r.dispatched)}</td>
-                <td class="ca-num"><strong>${caFmt(r.shortfall)}</strong></td>
-                <td>${caBar(r.rate, target)}${caOverSuppliedChip(r.rate, target)}</td>
-            </tr>`;
-        }
-        return `<tr>
-            <td><strong>${caEsc(r.name)}</strong></td>
-            <td class="ca-num">${caFmt(r.scheduled)}</td>
-            <td class="ca-num">${caFmt(r.dispatched)}</td>
-            <td>${caBar(r.rate, target)}${caOverSuppliedChip(r.rate, target)}</td>
-            <td>${caChip(r.rate, target)}</td>
-        </tr>`;
-    }).join("");
-}
-
-/* click a column heading to sort */
-function caInitTableSorting() {
-    const map = {
-        companyByLineBody: ["name", "scheduled", "dispatched", "rate", "rate"],
-        companyByCustomerBody: ["name", "scheduled", "dispatched", "rate", "rate"],
-        companyShortfallBody: ["part", "description", "line", "scheduled", "dispatched", "shortfall", "rate"]
-    };
-    const tableOf = { companyByLineBody: "line", companyByCustomerBody: "customer", companyShortfallBody: "parts" };
-    Object.entries(map).forEach(([bodyId, keys]) => {
-        const body = caEl(bodyId);
-        const headers = body?.closest("table")?.querySelectorAll("thead th");
-        if (!headers) return;
-        headers.forEach((th, i) => {
-            th.style.cursor = "pointer";
-            th.title = "Click to sort";
-            th.addEventListener("click", () => {
-                const tk = tableOf[bodyId];
-                const cur = caState.sort[tk] || {};
-                caState.sort[tk] = { key: keys[i], dir: cur.key === keys[i] && cur.dir === "desc" ? "asc" : "desc" };
-                caRenderTable(tk);
-            });
-        });
-    });
-}
-
-function companyLineSearchHandler() { caRenderTable("line"); }
-function companyCustomerSearchHandler() { caRenderTable("customer"); }
-function companyShortfallSearchHandler() { caRenderTable("parts"); }
-
-/* ---------- data quality (collapsed by default) ---------- */
-function caRenderQuality(dq) {
-    const panel = caEl("companyDataQuality");
-    const list = caEl("companyQualityIssuesList");
-    const content = caEl("companyDataQualityContent");
-    if (!panel || !list || !content) return;
-
-    const issues = [];
-    Object.entries(dq || {}).forEach(([key, value]) => {
-        let items = [];
-        if (Array.isArray(value)) items = value;
-        else if (value && typeof value === "object") items = Object.entries(value).map(([k, v]) => `${k}: ${v}`);
-        else if (typeof value === "number" && value > 0) items = [`${value} row(s) affected`];
-        else if (value === true) items = ["yes"];
-        if (items.length) issues.push({ key, items });
-    });
-
-    if (!issues.length) { panel.style.display = "none"; return; }
-
-    const h3 = panel.querySelector("h3");
-    if (h3) h3.textContent = `Data Quality Note (${issues.length} issue${issues.length !== 1 ? "s" : ""})`;
-    content.querySelector("p")?.remove();               // "Loading..." text
-
-    const nice = k => k.replace(/([A-Z])/g, " $1").replace(/^./, c => c.toUpperCase());
-    const show = it => (it && typeof it === "object") ? Object.values(it).join(" | ") : String(it);
-    list.innerHTML = issues.map(i => `
-        <div class="ca-issue"><strong>${caEsc(nice(i.key))}</strong>
-            <span class="ca-chip ca-amber">${i.items.length}</span>
-            <ul>${i.items.slice(0, 8).map(it => `<li>${caEsc(show(it))}</li>`).join("")}</ul>
-            ${i.items.length > 8 ? `<small class="ca-sub">and ${i.items.length - 8} more</small>` : ""}
-        </div>`).join("");
-
-    panel.style.display = "block";
-    if (!panel.dataset.touched) {                       // start collapsed
-        content.style.display = "none";
-        const btn = panel.querySelector("button");
-        if (btn) btn.textContent = "▶";
-    }
-}
-
-function toggleCompanyHideNoSchedule() {
-    if (!caState.tables) return;
-    Object.keys(caState.tables).forEach(caRenderTable);
-    const checked = caEl("companyHideNoSchedule")?.checked;
-    const hidden = ["line", "customer"].reduce(
-    (n, k) => n + caState.tables[k].rows.filter(r => r.scheduled === 0 && r.dispatched === 0).length, 0);
-    const el = caEl("companyHiddenCount");
-    if (el) el.textContent = checked ? `${hidden} hidden` : "0 hidden";
-}
-
-function caStatusLabel(rate, target) {
-    if (rate === null || rate === undefined) return "N/A";
-    if (rate >= target) return "On target";
-    if (rate >= target - 10) return "Close";
-    return "Below target";
-}
-
-function toggleDataQuality() {
-    const panel = caEl("companyDataQuality");
-    const content = caEl("companyDataQualityContent");
-    if (!panel || !content) return;
-    panel.dataset.touched = "1";
-    const open = content.style.display === "none";
-    content.style.display = open ? "block" : "none";
-    const btn = panel.querySelector("button");
-    if (btn) btn.textContent = open ? "▼" : "▶";
-}
-
-/* ---------- CSV export ---------- */
-function caInstallExportButton() {
-    if (caEl("companyExportBtn")) return;
-    const host = caEl("companyActions");
-    if (!host) return;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.id = "companyExportBtn";
-    btn.className = "btn-primary-sm";
-    btn.textContent = "⬇ Export CSV";
-    btn.addEventListener("click", exportCompanyAnalysisCsv);
-    host.appendChild(btn);
-}
-
-function exportCompanyAnalysisCsv() {
-    const tables = caState.tables;
-    if (!tables) { alert("Nothing to export yet. Open the tab and wait for the results."); return; }
-    const target = caTarget();
-    const q = v => `"${String(v ?? "").replace(/"/g, "\"\"")}"`;
-    const out = [];
-
-    const section = (title, header, rows) => {
-        out.push(q(title));
-        out.push(header.map(q).join(","));
-        rows.forEach(r => out.push(r.map(q).join(",")));
-        out.push("");
-    };
-    const byRate = r => (r.rate === null ? "N/A" : r.rate.toFixed(1) + "%");
-
-    section("Fill rate by product line", ["Product line", "Scheduled", "Dispatched", "Fill rate", "Status"],
-        tables.line.rows.map(r => [r.name, r.scheduled, r.dispatched, byRate(r), caStatus(r.rate, target).label]));
-    section("Fill rate by customer", ["Customer", "Scheduled", "Dispatched", "Fill rate", "Status"],
-        tables.customer.rows.map(r => [r.name, r.scheduled, r.dispatched, byRate(r), caStatus(r.rate, target).label]));
-    section("Top shortfall parts", ["Part no.", "Description", "Customer", "Line", "Scheduled", "Dispatched", "Shortfall", "Fill rate"],
-        tables.parts.rows.map(r => [r.part || r.name, r.description, r.customer, r.line, r.scheduled, r.dispatched, r.shortfall, byRate(r)]));
-
-    const blob = new Blob(["\uFEFF" + out.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `company-analysis-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-}

@@ -596,6 +596,7 @@ function compareDifferentSheets(snapshots, options = {}) {
         const changeSign = netChange >= 0 ? "+" : "";
         takeaway = `Overall demand shifted from ${formatNumberEn(baseTotal)} to ${formatNumberEn(compareTotal)} units (${changeSign}${formatNumberEn(netChange)} units or ${changeSign}${percentChange.toFixed(1)}%) for ${monthDisplay}. Out of ${allKeys.size} parts compared: ${partsIncreased} increased, ${partsDecreased} decreased${partsAdded ? `, ${partsAdded} newly introduced` : ""}${partsRemoved ? `, ${partsRemoved} removed` : ""}.`;
     }
+    
 
     return {
         status: "available",
@@ -632,46 +633,29 @@ function compareDifferentSheets(snapshots, options = {}) {
     };
 }
 
+function sumField(obj) {
+    if (!obj || typeof obj !== "object") return null;
+    const values = Object.values(obj).map(Number).filter(Number.isFinite);
+    return values.length ? values.reduce((s, v) => s + v, 0) : null;
+}
+
 function getMetricValue(row, metric, month) {
+    const specific = month && month !== "ALL";
     if (metric === "schedule") {
-        if (month && month !== "ALL") {
-            const val = getDemandForMonth(row, month);
-            if (val !== null) return val;
-        } else if (row.monthlySchedules && typeof row.monthlySchedules === "object") {
-            const values = Object.values(row.monthlySchedules).map(Number).filter(Number.isFinite);
-            if (values.length > 0) return values.reduce((sum, v) => sum + v, 0);
-        }
-        return Number(row.currentCustomerSchedule ?? row.currentMonth ?? row.customerSchedule ?? 0);
+        if (specific) return getDemandForMonth(row, month) ?? 0;
+        return sumField(row.monthlySchedules) ?? Number(row.currentCustomerSchedule ?? row.currentMonth ?? row.customerSchedule ?? 0);
     }
     if (metric === "commitment") {
-        if (month && month !== "ALL") {
-            const val = getMonthQuantity(row, "monthlyCommitments", month, "companyCommitment", "companyCommitmentProvided");
-            if (val !== null) return val;
-        } else if (row.monthlyCommitments && typeof row.monthlyCommitments === "object") {
-            const values = Object.values(row.monthlyCommitments).map(Number).filter(Number.isFinite);
-            if (values.length > 0) return values.reduce((sum, v) => sum + v, 0);
-        }
-        return Number(row.companyCommitment ?? 0);
+        if (specific) return getMonthQuantity(row, "monthlyCommitments", month, "companyCommitment", "companyCommitmentProvided") ?? 0;
+        return sumField(row.monthlyCommitments) ?? Number(row.companyCommitment ?? 0);
     }
     if (metric === "dispatch") {
-        if (month && month !== "ALL") {
-            const val = getMonthQuantity(row, "monthlyDispatches", month, "actualDispatch", "actualDispatchProvided");
-            if (val !== null) return val;
-        } else if (row.monthlyDispatches && typeof row.monthlyDispatches === "object") {
-            const values = Object.values(row.monthlyDispatches).map(Number).filter(Number.isFinite);
-            if (values.length > 0) return values.reduce((sum, v) => sum + v, 0);
-        }
-        return Number(row.actualDispatch ?? 0);
+        if (specific) return getMonthQuantity(row, "monthlyDispatches", month, "actualDispatch", "actualDispatchProvided") ?? 0;
+        return sumField(row.monthlyDispatches) ?? Number(row.actualDispatch ?? 0);
     }
-    if (metric === "production") {
-        return Number(row.actualProductionQty ?? 0);
-    }
-    if (metric === "balance") {
-        return Number(row.balance ?? 0);
-    }
-    if (metric === "originalSchedule") {
-        return Number(row.originalCustomerSchedule ?? row.scheduleReceivedQty ?? row.currentCustomerSchedule ?? 0);
-    }
+    if (metric === "production") return Number(row.actualProductionQty ?? 0);
+    if (metric === "balance") return Number(row.balance ?? 0);
+    if (metric === "originalSchedule") return Number(row.originalCustomerSchedule ?? row.scheduleReceivedQty ?? row.currentCustomerSchedule ?? 0);
     return 0;
 }
 
@@ -856,38 +840,158 @@ function compareWithinSameSheet(snapshots, options = {}) {
             }
         }
 
-        let totalA = 0;
-        let totalB = 0;
-        let partsFulfilled = 0;
-        let partsShortfall = 0;
-        let partsSurplus = 0;
-        let shortfallQty = 0;
-        let surplusQty = 0;
+        const allEntityRows = Array.from(byEntity.values());
+
+        // Count duplicate entity keys removed during dedup
+        let duplicateKeys = 0;
+        const matchedWithKeys = matchedRows.filter(r => getEntityKey(r) !== "||||");
+        duplicateKeys = matchedWithKeys.length - byEntity.size;
+
+        // ---- New: monthlyTrend over ALL months in the snapshot ----
+        const allMonths = new Set();
+        for (const row of allEntityRows) {
+            if (row.monthlyCommitments) {
+                Object.keys(row.monthlyCommitments).forEach(m => allMonths.add(m));
+            }
+            if (row.monthlySchedules) {
+                Object.keys(row.monthlySchedules).forEach(m => allMonths.add(m));
+            }
+            if (row.monthlyDispatches) {
+                Object.keys(row.monthlyDispatches).forEach(m => allMonths.add(m));
+            }
+            const dm = normalizeMonth(row.deliveryMonth);
+            if (dm) allMonths.add(dm);
+        }
+        const sortedMonths = Array.from(allMonths).sort();
+
+        const monthlyTrend = sortedMonths.map(m => {
+            let actCustSched = 0, commitment = 0, dispatched = 0;
+            let grossShortfall = 0, grossSurplus = 0;
+            for (const row of allEntityRows) {
+                const acs = row.monthlySchedules && Object.prototype.hasOwnProperty.call(row.monthlySchedules, m)
+                    ? Number(row.monthlySchedules[m]) : 0;
+                const com = row.monthlyCommitments && Object.prototype.hasOwnProperty.call(row.monthlyCommitments, m)
+                    ? Number(row.monthlyCommitments[m]) : 0;
+                const disp = row.monthlyDispatches && Object.prototype.hasOwnProperty.call(row.monthlyDispatches, m)
+                    ? Number(row.monthlyDispatches[m]) : 0;
+                actCustSched += acs;
+                commitment += com;
+                dispatched += disp;
+                grossShortfall += Math.max(com - disp, 0);
+                grossSurplus += Math.max(disp - com, 0);
+            }
+            return {
+                month: m,
+                label: formatMonthLabel(m),
+                actualCustomerSchedule: actCustSched,
+                commitment,
+                dispatched,
+                fillRateVsCommitment: commitment > 0 ? Math.round((dispatched / commitment) * 1000) / 10 : null,
+                fillRateVsCustomer: actCustSched > 0 ? Math.round((dispatched / actCustSched) * 1000) / 10 : null,
+                grossShortfall,
+                grossSurplus
+            };
+        });
+
+        // ---- New: byLine for the selected month ----
+        const lineMap = new Map();
+        for (const row of allEntityRows) {
+            const com = row.monthlyCommitments && Object.prototype.hasOwnProperty.call(row.monthlyCommitments, month)
+                ? Number(row.monthlyCommitments[month]) : 0;
+            const disp = row.monthlyDispatches && Object.prototype.hasOwnProperty.call(row.monthlyDispatches, month)
+                ? Number(row.monthlyDispatches[month]) : 0;
+            if (month !== "ALL" && com === 0 && disp === 0) continue;
+
+            const rawLine = String(row.line || "").trim().replace(/\s+/g, " ");
+            const lineName = (rawLine === "" || /^\d+$/.test(rawLine)) ? "Uncategorized" : rawLine;
+            const lineKey = lineName.toLowerCase();
+
+            if (!lineMap.has(lineKey)) {
+                lineMap.set(lineKey, {
+                    name: lineName,
+                    commitment: 0, dispatched: 0,
+                    grossShortfall: 0, grossSurplus: 0,
+                    parts: new Set(), partsOnTarget: 0
+                });
+            }
+            const bucket = lineMap.get(lineKey);
+            bucket.commitment += com;
+            bucket.dispatched += disp;
+            bucket.grossShortfall += Math.max(com - disp, 0);
+            bucket.grossSurplus += Math.max(disp - com, 0);
+            if (row.partNo) bucket.parts.add(String(row.partNo).trim());
+            if (com > 0 && disp >= com) bucket.partsOnTarget += 1;
+        }
+
+        const byLine = month !== "ALL" ? Array.from(lineMap.values()).map(l => ({
+            line: l.name,
+            commitment: l.commitment,
+            dispatched: l.dispatched,
+            fillRate: l.commitment > 0 ? Math.round((l.dispatched / l.commitment) * 1000) / 10 : null,
+            grossShortfall: l.grossShortfall,
+            grossSurplus: l.grossSurplus,
+            partsTotal: l.parts.size,
+            partsOnTarget: l.partsOnTarget
+        })) : [];
+
+        // ---- New: demandCoverage for the selected month ----
+        let customerDemand = 0, demandCommitment = 0, demandDispatched = 0;
+        if (month !== "ALL") {
+            for (const row of allEntityRows) {
+                customerDemand += row.monthlySchedules && Object.prototype.hasOwnProperty.call(row.monthlySchedules, month)
+                    ? Number(row.monthlySchedules[month]) : 0;
+                demandCommitment += row.monthlyCommitments && Object.prototype.hasOwnProperty.call(row.monthlyCommitments, month)
+                    ? Number(row.monthlyCommitments[month]) : 0;
+                demandDispatched += row.monthlyDispatches && Object.prototype.hasOwnProperty.call(row.monthlyDispatches, month)
+                    ? Number(row.monthlyDispatches[month]) : 0;
+            }
+        }
+        const demandCoverage = month === "ALL" ? null : {
+            customerDemand,
+            commitment: demandCommitment,
+            dispatched: demandDispatched,
+            commitmentCoverage: customerDemand > 0 ? Math.round((demandCommitment / customerDemand) * 1000) / 10 : null,
+            dispatchVsCustomer: customerDemand > 0 ? Math.round((demandDispatched / customerDemand) * 1000) / 10 : null
+        };
+
+        // ---- Summary computation (from all entity rows) ----
+        let totalA = 0, totalB = 0;
+        let partsOnTarget = 0, partsShortfall = 0, partsSurplus = 0;
+        let partsNoCommitment = 0, partsUnscheduledDispatch = 0;
+        let grossShortfallQty = 0, grossSurplusQty = 0;
+        let blankLines = 0, numericLines = 0;
 
         const rows = [];
-        for (const row of byEntity.values()) {
+        for (const row of allEntityRows) {
             const qtyA = getMetricValue(row, metricA, month);
             const qtyB = getMetricValue(row, metricB, month);
-            if (qtyA === 0 && qtyB === 0) continue;
 
             totalA += qtyA;
             totalB += qtyB;
             const diff = qtyB - qtyA;
 
-            let status = "fulfilled";
-            if (diff < 0) {
-                status = "shortfall";
-                partsShortfall++;
-                shortfallQty += Math.abs(diff);
-            } else if (diff > 0) {
-                status = "surplus";
-                partsSurplus++;
-                surplusQty += diff;
+            const rawLine = String(row.line || "").trim();
+            if (rawLine === "") blankLines++;
+            else if (/^\d+$/.test(rawLine)) numericLines++;
+
+            grossShortfallQty += Math.max(qtyA - qtyB, 0);
+            grossSurplusQty += Math.max(qtyB - qtyA, 0);
+            if (qtyA > 0) {
+                if (qtyB >= qtyA) { partsOnTarget++; if (qtyB > qtyA) partsSurplus++; }
+                else partsShortfall++;
+            } else if (qtyB > 0) {
+                partsUnscheduledDispatch++;
             } else {
-                partsFulfilled++;
+                partsNoCommitment++;
             }
 
-            const fulfillmentRate = qtyA > 0 ? (qtyB / qtyA) * 100 : (qtyB >= 0 ? 100 : 0);
+            if (qtyA === 0 && qtyB === 0) continue;
+
+            
+
+            const fulfillmentRate = qtyA > 0 ? (qtyB / qtyA) * 100 : null;
+            let status = diff < 0 ? "shortfall" : diff > 0 ? "surplus" : "fulfilled";
+            if (qtyA <= 0 && qtyB > 0) status = "unscheduled";
 
             rows.push({
                 customer: row.customer || row.customerCode || "Unknown",
@@ -906,17 +1010,29 @@ function compareWithinSameSheet(snapshots, options = {}) {
 
         rows.sort((a, b) => a.diff - b.diff);
         const netDiff = totalB - totalA;
-        const fulfillmentRate = totalA > 0 ? (totalB / totalA) * 100 : (totalB >= 0 ? 100 : 0);
+        const overallFulfillmentRate = totalA > 0 ? (totalB / totalA) * 100 : (totalB >= 0 ? 100 : 0);
         const monthLabel = formatMonthLabel(month);
+
+        const partsTotal = allEntityRows.length;
 
         let takeaway = "";
         if (rows.length === 0) {
             takeaway = `No data found comparing ${labelA} vs ${labelB} for ${monthLabel}.`;
-        } else if (partsShortfall === 0) {
-            takeaway = `100% fulfilled! ${labelB} completely met or exceeded ${labelA} (${formatNumberEn(totalB)} of ${formatNumberEn(totalA)} units) across all ${rows.length} parts for ${monthLabel}.`;
+        } else if (partsShortfall === 0 && partsUnscheduledDispatch === 0) {
+            takeaway = `100% fulfilled! ${labelB} completely met or exceeded ${labelA} (${formatNumberEn(totalB)} of ${formatNumberEn(totalA)} units) across all ${partsTotal} parts for ${monthLabel}.`;
         } else {
-            takeaway = `${labelB} achieved ${fulfillmentRate.toFixed(1)}% of ${labelA} (${formatNumberEn(totalB)} of ${formatNumberEn(totalA)} units) for ${monthLabel}. ${partsShortfall} parts experienced shortfalls totaling ${formatNumberEn(shortfallQty)} units.`;
+            takeaway = `${labelB} achieved ${overallFulfillmentRate.toFixed(1)}% of ${labelA} (${formatNumberEn(totalB)} of ${formatNumberEn(totalA)} units) for ${monthLabel}. ${partsShortfall} parts experienced shortfalls totaling ${formatNumberEn(grossShortfallQty)} units.`;
         }
+        if (demandCoverage && demandCoverage.customerDemand > 0) {
+            takeaway += ` Customers actually asked for ${formatNumberEn(demandCoverage.customerDemand)} units: IFB committed ${demandCoverage.commitmentCoverage}% of that and shipped ${demandCoverage.dispatchVsCustomer}%.`;
+        }
+
+        const dataQuality = {
+            blankLines,
+            numericLines,
+            duplicateKeys,
+            unscheduledDispatchParts: partsUnscheduledDispatch
+        };
 
         return {
             status: "available",
@@ -932,17 +1048,16 @@ function compareWithinSameSheet(snapshots, options = {}) {
             labelB,
             month,
             monthLabel,
+            monthlyTrend,
+            byLine,
+            demandCoverage,
+            dataQuality,
             summary: {
-                totalA,
-                totalB,
-                netDiff,
-                fulfillmentRate,
-                partsTotal: rows.length,
-                partsFulfilled,
-                partsShortfall,
-                partsSurplus,
-                shortfallQty,
-                surplusQty,
+                totalA, totalB, netDiff, fulfillmentRate: overallFulfillmentRate,
+                partsTotal, partsOnTarget, partsFulfilled: partsOnTarget,
+                partsShortfall, partsSurplus, partsNoCommitment, partsUnscheduledDispatch,
+                shortfallQty: grossShortfallQty, grossShortfallQty,
+                surplusQty: grossSurplusQty, grossSurplusQty,
                 takeaway
             },
             rows
