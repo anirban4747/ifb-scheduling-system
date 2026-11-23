@@ -5,7 +5,6 @@
 
 let allScheduleRows = [];
 let activeCustomer = "ALL";
-let analyticsRequestId = 0;
 
 const API_BASE_URL = ["3000", "3001"].includes(window.location.port)
     ? ""
@@ -92,7 +91,6 @@ function switchTab(tabId) {
     }
     if (tabId === "analysis") {
         initAnalysisTab();
-        refreshHistoricalAnalytics();
     }
     if (tabId === "upload") {
         loadImportedFilesList();
@@ -141,7 +139,6 @@ async function loadMasterData() {
 function populateCustomerDropdowns() {
     const dashSelect = document.getElementById("customerSelect");
     const recordsFilter = document.getElementById("recordsCustomerFilter");
-    const analysisSelect = document.getElementById("analysisCustomerSelect");
 
     const customers = activeMasterData.customers || [];
 
@@ -156,11 +153,6 @@ function populateCustomerDropdowns() {
                                   customers.map(c => `<option value="${escapeHTML(c.name)}">${escapeHTML(c.name)}</option>`).join("");
     }
 
-    if (analysisSelect) {
-        analysisSelect.innerHTML = `<option value="ALL">All Customers</option>` +
-                                   customers.map(c => `<option value="${escapeHTML(c.name)}">${escapeHTML(c.name)}</option>`).join("");
-        analysisSelect.value = customers.some(c => c.name === activeCustomer) ? activeCustomer : "ALL";
-    }
 }
 
 // DYNAMIC MONTH GENERATOR & FORM CALCULATIONS
@@ -252,48 +244,6 @@ function getMonthlyScheduleQuantity(row, monthKey = getSelectedMonthKey(), fallb
     return Number(fallbackValue) || 0;
 }
 
-function getLatestScheduleRows(rows) {
-    const latestByPart = new Map();
-    const versionRank = (version) => {
-        const value = String(version || "").trim();
-        if (/^(current|latest|final)$/i.test(value)) return { type: 2, value: Infinity };
-        const match = value.match(/^(?:v(?:ersion)?\s*)?(\d+(?:\.\d+)?)$/i);
-        return match ? { type: 1, value: Number(match[1]) } : { type: 0, value };
-    };
-
-    rows.forEach((row, index) => {
-        if (!row.partNo) {
-            latestByPart.set(`row-${index}`, row);
-            return;
-        }
-
-        const key = [
-            row.customerCode || row.customer || "",
-            row.partNo
-        ].map(value => String(value).trim().toLowerCase()).join("|");
-        const current = latestByPart.get(key);
-        if (!current) {
-            latestByPart.set(key, row);
-            return;
-        }
-
-        const candidateVersion = versionRank(row.version);
-        const currentVersion = versionRank(current.version);
-        let replace = candidateVersion.type > currentVersion.type ||
-            (candidateVersion.type === currentVersion.type &&
-                (typeof candidateVersion.value === "number" && typeof currentVersion.value === "number"
-                    ? candidateVersion.value > currentVersion.value
-                    : String(candidateVersion.value).localeCompare(String(currentVersion.value), undefined, { numeric: true, sensitivity: "base" }) > 0));
-
-        if (candidateVersion.type === currentVersion.type &&
-            candidateVersion.value === currentVersion.value) {
-            replace = Date.parse(row.importedAt || "") >= Date.parse(current.importedAt || "");
-        }
-        if (replace) latestByPart.set(key, row);
-    });
-
-    return [...latestByPart.values()];
-}
 
 function displayScheduleMonth(value) {
     const text = String(value || "").trim();
@@ -354,17 +304,9 @@ function updateDashboardMonthLabels() {
     const month3Label = formatMonthLabel(month3Key);
 
     const planTitle = `Monthly Plan: ${month1Label} (FIRM) and (TENTATIVE 2 months)`;
-    const dashBanner = document.getElementById("dashboardPlanBanner");
     const recBanner = document.getElementById("recordsPlanBanner");
-    if (dashBanner) dashBanner.textContent = planTitle;
     if (recBanner) recBanner.textContent = planTitle;
 
-    const snapM1 = document.getElementById("snapshotMonth1Label");
-    const snapM2 = document.getElementById("snapshotMonth2Label");
-    const snapM3 = document.getElementById("snapshotMonth3Label");
-    if (snapM1) snapM1.textContent = month1Label;
-    if (snapM2) snapM2.textContent = month2Label;
-    if (snapM3) snapM3.textContent = month3Label;
 
     const recM1 = document.getElementById("recordsMonth1Label");
     const recM2 = document.getElementById("recordsMonth2Label");
@@ -393,248 +335,14 @@ function updateDashboardMonthLabels() {
     renderMasterRecordsTable();
 }
 
-function updateDashboardKpiStrip(achievement) {
-    const bar = document.getElementById("dashboardAchievementBar");
-    const text = document.getElementById("dashboardAchievementText");
-
-    const pct = Math.min(Math.max(achievement, 0), 100);
-    if (bar) bar.style.width = pct + "%";
-    if (text) text.textContent = achievement.toFixed(2) + "%";
-}
-
-async function refreshHistoricalAnalytics() {
-    const requestId = ++analyticsRequestId;
-    const month = getSelectedMonthKey();
-    const customer = activeCustomer || "ALL";
-    const analysisMonth = document.getElementById("analysisMonth");
-    const analysisCustomer = document.getElementById("analysisCustomerSelect");
-    const previousSelect = document.getElementById("wapePreviousSnapshot");
-    const currentSelect = document.getElementById("wapeCurrentSnapshot");
-    if (analysisMonth) analysisMonth.value = month;
-    if (analysisCustomer) analysisCustomer.value = customer;
-
-    try {
-        const timelineQuery = new URLSearchParams({ month, customer });
-        const timelineResponse = await fetch(apiUrl(`/analytics/snapshots?${timelineQuery}`));
-        if (!timelineResponse.ok) throw new Error(`Snapshot timeline request failed (HTTP ${timelineResponse.status}).`);
-        const timelineData = await timelineResponse.json();
-        if (requestId !== analyticsRequestId) return;
-
-        const timeline = timelineData.snapshots || [];
-        const available = timeline.filter(snapshot => snapshot.hasDemand);
-        const distinctAvailable = available.filter(snapshot => !snapshot.duplicateOfPrevious);
-        const oldPrevious = previousSelect?.value || "";
-        const oldCurrent = currentSelect?.value || "";
-        const validIds = new Set(available.map(snapshot => snapshot.snapshotId));
-        const defaultPrevious = distinctAvailable.length >= 2 ? distinctAvailable[distinctAvailable.length - 2].snapshotId : "";
-        const defaultCurrent = distinctAvailable.length >= 2 ? distinctAvailable[distinctAvailable.length - 1].snapshotId : "";
-        const previousId = validIds.has(oldPrevious) ? oldPrevious : defaultPrevious;
-        const currentId = validIds.has(oldCurrent) ? oldCurrent : defaultCurrent;
-
-        const populateTimelineSelect = (select, placeholder, selectedId) => {
-            if (!select) return;
-            select.innerHTML = `<option value="">${placeholder}</option>` + timeline.map(snapshot => {
-                const captured = new Date(snapshot.capturedAt);
-                const dateLabel = snapshot.snapshotDate || (Number.isFinite(captured.getTime())
-                    ? new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeZone: "Asia/Kolkata" }).format(captured)
-                    : "");
-                const duplicateLabel = snapshot.duplicateOfPrevious ? " · unchanged from previous upload" : "";
-                const label = `${dateLabel} · ${snapshot.source || "Excel upload"}${snapshot.hasDemand ? ` · ${snapshot.demandRows} rows${duplicateLabel}` : " · no data for month/customer"}`;
-                return `<option value="${escapeHTML(snapshot.snapshotId)}"${snapshot.hasDemand ? "" : " disabled"}>${escapeHTML(label)}</option>`;
-            }).join("");
-            select.value = selectedId;
-        };
-        populateTimelineSelect(previousSelect, "Select earlier snapshot", previousId);
-        populateTimelineSelect(currentSelect, "Select later snapshot", currentId);
-
-        const query = new URLSearchParams({ month, customer });
-        if (previousId && currentId) {
-            query.set("previousSnapshotId", previousId);
-            query.set("currentSnapshotId", currentId);
-        }
-        const response = await fetch(apiUrl(`/analytics/historical?${query}`));
-        if (!response.ok) throw new Error(`Analytics request failed (HTTP ${response.status}).`);
-        const analytics = await response.json();
-        if (requestId !== analyticsRequestId) return;
-
-        const wapeValue = document.getElementById("analysisWapeValue");
-        const wapeDetail = document.getElementById("analysisWapeDetail");
-        const quantityValue = document.getElementById("analysisOnTimeQuantity");
-        const quantityDetail = document.getElementById("analysisOnTimeQuantityDetail");
-        const lineValue = document.getElementById("analysisOnTimeLine");
-        const lineDetail = document.getElementById("analysisOnTimeLineDetail");
-        const scopeLabel = document.getElementById("analysisScopeLabel");
-        const readiness = document.getElementById("analysisReadiness");
-        const revisionRows = document.getElementById("demandRevisionRows");
-        const executionRows = document.getElementById("companyExecutionRows");
-        const scopeCustomer = customer === "ALL" ? "All Customers" : customer;
-        if (scopeLabel) scopeLabel.textContent = scopeCustomer;
-
-        if (wapeValue) {
-            wapeValue.textContent = formatPercentValue(analytics.demandRevisionWape?.value);
-        }
-        if (wapeDetail) {
-            const wape = analytics.demandRevisionWape;
-            wapeDetail.textContent = wape.status === "needs_two_snapshots"
-                ? "Select two dated uploads containing demand for this delivery month"
-                : wape.status === "select_two_snapshots"
-                    ? "Choose two different uploads"
-                    : wape.status === "snapshots_out_of_order"
-                        ? "Choose the earlier upload first"
-                        : wape.status === "snapshot_has_no_month_data"
-                            ? "One selected upload has no demand for this month/customer"
-                : wape.status === "zero_latest_demand"
-                    ? "Latest demand is zero"
-                    : wape.status === "available"
-                        ? `${wape.previousSnapshotDate} (${wape.previousSource}) → ${wape.latestSnapshotDate} (${wape.latestSource})`
-                        : "Demand history unavailable";
-        }
-        if (revisionRows) {
-            const revisions = analytics.demandRevisionWape.revisions || [];
-            revisionRows.innerHTML = revisions.length
-                ? revisions.map(revision => `
-                    <tr>
-                        <td>${escapeHTML(revision.customer)}</td>
-                        <td>${escapeHTML(revision.partNo)}</td>
-                        <td>${formatNumber(revision.previousDemand)}</td>
-                        <td>${formatNumber(revision.latestDemand)}</td>
-                        <td>${revision.change > 0 ? "+" : ""}${formatNumber(revision.change)}</td>
-                    </tr>
-                `).join("")
-                : `<tr><td colspan="5">${["needs_two_snapshots", "select_two_snapshots"].includes(analytics.demandRevisionWape.status)
-                    ? "Select two different dated uploads that contain this delivery month."
-                    : analytics.demandRevisionWape.status === "snapshots_out_of_order"
-                        ? "Select the older upload as the earlier snapshot and the newer upload as the later snapshot."
-                    : analytics.demandRevisionWape.status === "available"
-                        ? "No customer demand revisions found between these uploads."
-                        : "Demand changes are not available for this month."}</td></tr>`;
-        }
-
-        const onTime = analytics.onTime;
-        const onTimeText = onTime.status === "due_date_not_passed"
-            ? "Due at month-end"
-            : onTime.status === "snapshot_before_due_date"
-                ? "Upload a post-month-end snapshot"
-                : onTime.status === "no_month_aligned_commitments"
-                    ? "No month-aligned company commitment"
-                    : onTime.status === "missing_dispatch_dates"
-                        ? "Dispatch date missing for one or more committed parts"
-                        : onTime.status === "missing_dispatch_quantities"
-                            ? "Dispatch quantity missing for one or more commitments"
-                            : onTime.status === "zero_commitment"
-                                ? "No committed quantity"
-                                : onTime.status === "available"
-                                    ? `${formatNumber(onTime.onTimeQty)} of ${formatNumber(onTime.committedQty)} committed units on time`
-                                    : "Unavailable";
-
-        if (quantityValue) {
-            quantityValue.textContent = formatPercentValue(onTime?.quantityRate);
-        }
-        if (quantityDetail) quantityDetail.textContent = onTimeText;
-        if (lineValue) {
-            lineValue.textContent = formatPercentValue(onTime?.lineRate);
-        }
-        if (lineDetail) {
-            lineDetail.textContent = onTime.status === "available"
-                ? `${formatNumber(onTime.onTimeLines)} of ${formatNumber(onTime.commitmentLines)} committed part lines fully on time`
-                : onTimeText;
-        }
-        if (executionRows) {
-            const issues = onTime.issues || [];
-            executionRows.innerHTML = issues.length
-                ? issues.map(issue => `
-                    <tr>
-                        <td>${escapeHTML(issue.customer)}</td>
-                        <td>${escapeHTML(issue.partNo)}</td>
-                        <td>${escapeHTML(issue.type)}</td>
-                        <td>${formatNumber(issue.committedQty)}</td>
-                        <td>${issue.dispatchedQty === null ? "Missing" : formatNumber(issue.dispatchedQty)}</td>
-                        <td>${escapeHTML(issue.dispatchDate || "Missing")}</td>
-                    </tr>
-                `).join("")
-                : `<tr><td colspan="6">${onTime.status === "available"
-                    ? "No short or late dispatch gaps found in the selected month."
-                    : "Execution gaps cannot be identified until commitment, dispatch quantity, and dispatch date are available."}</td></tr>`;
-        }
-
-        if (readiness) {
-            const wapeStatus = analytics.demandRevisionWape.status;
-            const executionIsAvailable = onTime.status === "available";
-            const issues = onTime.issues || [];
-            const executionGaps = issues.filter(issue => /short dispatch|late dispatch/i.test(issue.type));
-            const missingEvidence = issues.filter(issue => /^missing /i.test(issue.type));
-            if (wapeStatus !== "available" && !executionIsAvailable) {
-                readiness.textContent = `${wapeStatus === "needs_two_snapshots"
-                    ? "Select two dated uploads containing this delivery month."
-                    : "WAPE is unavailable for the selected snapshots."} On-time is not assessable because ${onTimeText.toLowerCase()}; commitment and dispatch evidence is needed.`;
-            } else if (!executionIsAvailable) {
-                readiness.textContent = `WAPE is ${Number.isFinite(analytics.demandRevisionWape.value) ? `${analytics.demandRevisionWape.value.toFixed(2)}% for the selected snapshots` : "unavailable for the selected snapshots"}. On-time is not assessable because ${onTimeText.toLowerCase()}; missing evidence is not proof of a company mistake.`;
-                if (executionGaps.length) {
-                    readiness.textContent += ` ${executionGaps.length} short/late item(s) are listed for review`;
-                    if (missingEvidence.length) readiness.textContent += ` alongside ${missingEvidence.length} missing-evidence item(s)`;
-                    readiness.textContent += ".";
-                }
-            } else if (executionGaps.length) {
-                readiness.textContent = `${executionGaps.length} potential short/late execution gap(s) found against recorded commitments. Confirm root cause; demand revisions are shown separately and are not company performance errors.`;
-            } else {
-                readiness.textContent = "On-time performance is assessable from the selected month’s commitment and dispatch evidence. No short or late dispatch gaps were found.";
-            }
-        }
-    } catch (error) {
-        if (requestId !== analyticsRequestId) return;
-        console.error("Unable to load historical schedule analytics:", error);
-        ["analysisWapeValue", "analysisOnTimeQuantity", "analysisOnTimeLine"].forEach(id => {
-            const element = document.getElementById(id);
-            if (element) element.textContent = "Error";
-        });
-        ["analysisWapeDetail", "analysisOnTimeQuantityDetail", "analysisOnTimeLineDetail"].forEach(id => {
-            const element = document.getElementById(id);
-            if (element) element.textContent = "Analytics could not be loaded";
-        });
-        const readiness = document.getElementById("analysisReadiness");
-        if (readiness) readiness.textContent = "Analysis data could not be loaded. Check the backend and try again.";
-    }
-}
 
 // ==========================================================================
 // STREAMLINED SCHEDULE & PLAN ANALYSIS CENTER
 // ==========================================================================
 
-let currentStreamlinedMode = "same"; // "same" or "diff"
 let currentComparisonRows = [];
 let currentComparisonFilter = "all";
 
-function selectStreamlinedMode(mode) {
-    currentStreamlinedMode = mode;
-    document.getElementById("tabBtnSame")?.classList.toggle("active", mode === "same");
-    document.getElementById("tabBtnDiff")?.classList.toggle("active", mode === "diff");
-
-    const pSame = document.getElementById("panelControlsSame");
-    const pDiff = document.getElementById("panelControlsDiff");
-    if (pSame) pSame.style.display = mode === "same" ? "block" : "none";
-    if (pDiff) pDiff.style.display = mode === "diff" ? "block" : "none";
-
-    runStreamlinedAnalysis();
-}
-
-function onSameViewModeChange() {
-    const view = document.getElementById("sameViewMode")?.value || "metrics";
-    const metricWrap = document.getElementById("sameMetricMonthWrap");
-    const monthAWrap = document.getElementById("sameMonthAWrap");
-    const monthBWrap = document.getElementById("sameMonthBWrap");
-
-    if (view === "metrics") {
-        if (metricWrap) metricWrap.style.display = "flex";
-        if (monthAWrap) monthAWrap.style.display = "none";
-        if (monthBWrap) monthBWrap.style.display = "none";
-    } else {
-        if (metricWrap) metricWrap.style.display = "none";
-        if (monthAWrap) monthAWrap.style.display = "flex";
-        if (monthBWrap) monthBWrap.style.display = "flex";
-    }
-
-    runStreamlinedAnalysis();
-}
 
 async function onSameSheetChange() {
     const sel = document.getElementById("sameSheetSelect");
@@ -643,15 +351,7 @@ async function onSameSheetChange() {
     runStreamlinedAnalysis();
 }
 
-function swapComparisonSheets() {
-    const baseSel = document.getElementById("baseSheetSelect");
-    const compSel = document.getElementById("compareSheetSelect");
-    if (!baseSel || !compSel) return;
-    const temp = baseSel.value;
-    baseSel.value = compSel.value;
-    compSel.value = temp;
-    runStreamlinedAnalysis();
-}
+
 
 async function initAnalysisTab() {
     await loadComparisonMeta();
@@ -675,13 +375,8 @@ async function loadComparisonMeta(selectedSnapshotId) {
         if (!res.ok) throw new Error("Failed to load comparison metadata.");
         const meta = await res.json();
 
-        const baseSel = document.getElementById("baseSheetSelect");
-        const compSel = document.getElementById("compareSheetSelect");
         const sameSel = document.getElementById("sameSheetSelect");
-        const diffMonthSel = document.getElementById("diffMonthSelect");
-        const diffCustSel = document.getElementById("diffCustomerSelect");
-        const sameMonthA = document.getElementById("sameMonthA");
-        const sameMonthB = document.getElementById("sameMonthB");
+        const sameCompareMonth = document.getElementById("sameCompareMonth");
         const sameMetricMonth = document.getElementById("sameMetricMonth");
         const sameCustSel = document.getElementById("sameCustomerSelect");
 
@@ -695,8 +390,6 @@ async function loadComparisonMeta(selectedSnapshotId) {
 
         if (snapshots.length === 0) {
             const emptyOpt = `<option value="">No Excel sheets uploaded</option>`;
-            if (baseSel) baseSel.innerHTML = emptyOpt;
-            if (compSel) compSel.innerHTML = emptyOpt;
             if (sameSel) sameSel.innerHTML = emptyOpt;
             return meta;
         }
@@ -713,45 +406,29 @@ async function loadComparisonMeta(selectedSnapshotId) {
             } else if (oldSame && snapshots.some(s => s.snapshotId === oldSame)) {
                 sameSel.value = oldSame;
             } else {
-                sameSel.value = snapshots[0].snapshotId;
+                sameSel.value = snapshots[snapshots.length - 1].snapshotId;
             }
         }
 
-        if (baseSel) {
-            baseSel.innerHTML = optionsHtml;
-            if (oldBase && snapshots.some(s => s.snapshotId === oldBase)) {
-                baseSel.value = oldBase;
-            } else if (snapshots.length >= 2) {
-                baseSel.value = snapshots[0].snapshotId;
-            } else {
-                baseSel.value = snapshots[0].snapshotId;
-            }
-        }
-
-        if (compSel) {
-            compSel.innerHTML = optionsHtml;
-            if (oldComp && snapshots.some(s => s.snapshotId === oldComp)) {
-                compSel.value = oldComp;
-            } else if (snapshots.length >= 2) {
-                compSel.value = snapshots[1].snapshotId;
-            } else {
-                compSel.value = snapshots[0].snapshotId;
-            }
-        }
 
         const months = meta.availableMonths || [];
-        const allMonths = meta.allMonths || months;
         const monthOpt = m => `<option value="${escapeHTML(m)}">${formatMonthLabel(m)} (${m})</option>`;
-        setOptionsKeep(diffMonthSel, `<option value="ALL">All Months</option>` + allMonths.map(monthOpt).join(""));
-        setOptionsKeep(sameMetricMonth, `<option value="ALL">All Months</option>` + months.map(monthOpt).join(""), months[0]);
-        setOptionsKeep(sameMonthA, months.map(monthOpt).join(""), months[0]);
-        setOptionsKeep(sameMonthB, months.map(monthOpt).join(""), months[1] ?? months[0]);
+        setOptionsKeep(sameMetricMonth, months.map(monthOpt).join(""), months[0]);
+        setOptionsKeep(
+            sameCompareMonth,
+            `<option value="PREV">Previous month</option><option value="NONE">No comparison</option>` + months.map(monthOpt).join(""),
+            "PREV"
+        );
 
         const customers = meta.availableCustomers || [];
-        const allCustomers = meta.allCustomers || customers;
         const custOpt = c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`;
-        setOptionsKeep(diffCustSel, `<option value="ALL">All Customers</option>` + allCustomers.map(custOpt).join(""));
         setOptionsKeep(sameCustSel, `<option value="ALL">All Customers</option>` + customers.map(custOpt).join(""));
+        const partList = document.getElementById("samePartList");
+        if (partList) {
+            partList.innerHTML = (meta.availableParts || []).map(p =>
+                `<option value="${escapeHTML(p.partNo)}" label="${escapeHTML(p.description || "")}"></option>`
+            ).join("");
+        }
 
         return meta;
     } catch (err) {
@@ -760,13 +437,16 @@ async function loadComparisonMeta(selectedSnapshotId) {
 }
 
 async function runStreamlinedAnalysis() {
-    if (currentStreamlinedMode === "same") {
-        await runSameSheetStreamlined();
-    } else {
-        await runDiffSheetsStreamlined();
-    }
+    await runSameSheetStreamlined();
 }
 let cmpData = null;
+let cmpRange = 6;
+function setCmpRange(n) {
+    cmpRange = n === 12 ? 12 : 6;
+    document.querySelectorAll("#cmpRangeToggle button").forEach(b =>
+        b.classList.toggle("active", Number(b.dataset.range) === cmpRange));
+    runStreamlinedAnalysis();
+}
 let cmpLineSort = { key: "grossShortfall", dir: "desc" };
 
 function cmpTarget() {
@@ -793,7 +473,7 @@ function niceCeil(v) {
 
 function hideCmpExtras() {
     cmpData = null;
-    ["cmpTrendPanel", "cmpLinePanel", "cmpDataQuality"].forEach(id => {
+    ["cmpTrendPanel", "cmpLinePanel"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = "none";
     });
@@ -814,6 +494,12 @@ function renderTrendChart() {
     const trend = cmpData?.monthlyTrend || [];
     if (!trend.length) { panel.style.display = "none"; return; }
     panel.style.display = "block";
+        const custSel = document.getElementById("sameCustomerSelect")?.value || "ALL";
+    const partTxt = (document.getElementById("samePartInput")?.value || "").trim();
+    const scopeEl = document.getElementById("cmpTrendScope");
+    if (scopeEl) {
+        scopeEl.textContent = `${custSel === "ALL" ? "All customers" : custSel} · ${partTxt ? `Part: ${partTxt}` : "All parts"} · ${trend[0].label} to ${trend[trend.length - 1].label}. Click a month to select it; the chip is dispatched ÷ commitment.`;
+    }
 
     const target = cmpTarget();
     const W = 760, H = 250, pl = 44, pr = 12, pt = 12, pb = 66;
@@ -822,6 +508,7 @@ function renderTrendChart() {
     const y = v => pt + ph - (v / maxY) * ph;
     const slot = pw / trend.length;
     const gw = Math.min(slot * 0.62, 110), bw = gw / 3;
+    const chipW = Math.min(54, slot - 6);
     const axis = v => v >= 1000 ? `${+(v / 1000).toFixed(1)}k` : `${Math.round(v)}`;
 
     const grid = [0, 0.5, 1].map(f => {
@@ -837,13 +524,15 @@ function renderTrendChart() {
         const rateText = m.fillRateVsCommitment == null ? "–" : `${m.fillRateVsCommitment.toFixed(1)}%`;
         const bar = (v, cls, j) =>
             `<rect class="${cls}" x="${x0 + bw * j + 1}" y="${y(v)}" width="${bw - 2}" height="${Math.max(pt + ph - y(v), 0)}" rx="2"/>`;
-        const tip = `${m.label}\nCustomer demand: ${formatNumber(m.actualCustomerSchedule)}\nIFB commitment: ${formatNumber(m.commitment)}\nDispatched: ${formatNumber(m.dispatched)}\nFill rate: ${rateText}`;
-        return `<g class="cmp-month${selected ? " is-selected" : ""}" data-month="${escapeHTML(m.month)}">
+        const tip = m.hasData
+            ? `${m.label}\nCustomer demand: ${formatNumber(m.actualCustomerSchedule)}\nIFB commitment: ${formatNumber(m.commitment)}\nDispatched: ${formatNumber(m.dispatched)}\nFill rate: ${rateText}`
+            : `${m.label}\nNo data for this selection`;
+        return `<g class="cmp-month${selected ? " is-selected" : ""}${m.hasData ? "" : " is-empty"}" data-month="${escapeHTML(m.month)}">
             <title>${escapeHTML(tip)}</title>
             <rect class="slot-bg" x="${cx - slot / 2 + 2}" y="${pt}" width="${slot - 4}" height="${H - pt - 4}" rx="6"/>
             ${bar(m.actualCustomerSchedule, "bar-demand", 0)}${bar(m.commitment, "bar-commit", 1)}${bar(m.dispatched, "bar-disp", 2)}
             <text class="month-label" x="${cx}" y="${pt + ph + 18}" text-anchor="middle">${escapeHTML(m.label)}</text>
-            <rect class="chip-bg ${st.cls}" x="${cx - 27}" y="${pt + ph + 28}" width="54" height="20" rx="10"/>
+            <rect class="chip-bg ${st.cls}" x="${cx - chipW / 2}" y="${pt + ph + 28}" width="${chipW}" height="20" rx="10"/>
             <text class="chip-txt ${st.cls}" x="${cx}" y="${pt + ph + 42}" text-anchor="middle">${rateText}</text>
         </g>`;
     }).join("");
@@ -915,203 +604,146 @@ function renderLineTable() {
         <td class="num">${ts ? "-" + formatNumber(ts) : "–"}</td><td></td></tr>`;
 }
 
-function renderDataQualityNote() {
-    const el = document.getElementById("cmpDataQuality");
-    if (!el) return;
-    const dq = cmpData?.dataQuality || {};
-    const parts = [];
-    if (dq.blankLines) parts.push(`${dq.blankLines} parts have no Line`);
-    if (dq.numericLines) parts.push(`${dq.numericLines} have a part number in the Line column`);
-    if (dq.duplicateKeys) parts.push(`${dq.duplicateKeys} duplicate rows were merged`);
-    if (dq.unscheduledDispatchParts) parts.push(`${dq.unscheduledDispatchParts} parts shipped with no schedule`);
-    el.style.display = parts.length ? "block" : "none";
-    el.textContent = parts.length ? `⚠ Data check: ${parts.join(" · ")}` : "";
+async function checkDataQuality(snapshotId, name) {
+    const box = document.getElementById("dataQualityResult");
+    if (!box) return;
+    box.style.display = "block";
+    box.textContent = `Checking ${name}...`;
+    try {
+        const q = new URLSearchParams({ snapshotId, mode: "metrics", month: "ALL", customer: "ALL" });
+        const res = await fetch(apiUrl(`/analytics/compare-within-sheet?${q}`));
+        if (!res.ok) throw new Error("Request failed.");
+        const data = await res.json();
+        const dq = data.dataQuality;
+        if (!dq) throw new Error(data.message || "No data available for this file.");
+        const parts = [];
+        if (dq.blankLines) parts.push(`${dq.blankLines} parts have no Line`);
+        if (dq.numericLines) parts.push(`${dq.numericLines} have a part number in the Line column`);
+        if (dq.duplicateKeys) parts.push(`${dq.duplicateKeys} duplicate rows were merged`);
+        if (dq.unscheduledDispatchParts) parts.push(`${dq.unscheduledDispatchParts} parts shipped with no schedule`);
+        box.textContent = parts.length ? `⚠ ${name}: ${parts.join(" · ")}` : `✓ ${name}: no data issues found`;
+    } catch (err) {
+        box.textContent = `Could not check ${name}: ${err.message}`;
+    }
 }
-async function runSameSheetStreamlined() {
-    const snapshotId = document.getElementById("sameSheetSelect")?.value;
-    const view = document.getElementById("sameViewMode")?.value || "metrics";
-    const monthA = document.getElementById("sameMonthA")?.value;
-    const monthB = document.getElementById("sameMonthB")?.value;
-    const metricMonth = document.getElementById("sameMetricMonth")?.value || "ALL";
-    const customer = document.getElementById("sameCustomerSelect")?.value || "ALL";
 
-    const takeawayEl = document.getElementById("analysisTakeawayText");
+let sameRunId = 0;
+let comparisonSort = { key: null, dir: "desc" };
+
+function sortComparison(key) {
+    comparisonSort = {
+        key,
+        dir: comparisonSort.key === key && comparisonSort.dir === "desc" ? "asc" : "desc"
+    };
+    renderComparisonTable();
+}
+
+function rowKey(r) {
+    return [r.customerCode || r.customer, r.partNo, r.customerPartNo, r.line]
+        .map(v => String(v ?? "").trim().toLowerCase()).join("|");
+}
+
+function resolveCompareMonth(month) {
+    const compareSel = document.getElementById("sameCompareMonth");
+    const monthSel = document.getElementById("sameMetricMonth");
+    let target = compareSel?.value || "PREV";
+    if (target === "NONE") return "";
+    if (target === "PREV") target = shiftYearMonth(month, -1);
+    const exists = monthSel && [...monthSel.options].some(o => o.value === target);
+    return exists && target !== month ? target : "";
+}
+
+async function runSameSheetStreamlined() {
+    const runId = ++sameRunId;
+    const snapshotId = document.getElementById("sameSheetSelect")?.value;
+    const month = document.getElementById("sameMetricMonth")?.value || "ALL";
+    const customer = document.getElementById("sameCustomerSelect")?.value || "ALL";
+    const part = (document.getElementById("samePartInput")?.value || "").trim();
+    const compareMonth = month !== "ALL" ? resolveCompareMonth(month) : "";
+
     const tbody = document.getElementById("comparisonTableBody");
 
     if (!snapshotId) {
-        if (takeawayEl) takeawayEl.textContent = "Please upload an Excel workbook in the 'Excel Bulk Import' tab to begin analysis.";
-        if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">No Excel sheets uploaded yet.</td></tr>`;
+        if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #64748b; padding: 24px;">No Excel sheets uploaded yet.</td></tr>`;
         return;
     }
 
     try {
-        const query = new URLSearchParams({
-            snapshotId,
-            mode: view,
-            monthA: monthA || "",
-            monthB: monthB || "",
-            metricA: "commitment",
-            metricB: "dispatch",
-            month: metricMonth,
-            customer
-        });
-        const res = await fetch(apiUrl(`/analytics/compare-within-sheet?${query}`));
-        if (!res.ok) throw new Error("Analysis request failed.");
-        const data = await res.json();
+        const common = { snapshotId, customer, part };
+        const metricsQuery = new URLSearchParams({ ...common, mode: "metrics", metricA: "commitment", metricB: "dispatch", month, range: String(cmpRange) });
+        const requests = [fetch(apiUrl(`/analytics/compare-within-sheet?${metricsQuery}`))];
+        if (compareMonth) {
+            const changeQuery = new URLSearchParams({ ...common, mode: "months", monthA: compareMonth, monthB: month });
+            requests.push(fetch(apiUrl(`/analytics/compare-within-sheet?${changeQuery}`)));
+        }
+        const responses = await Promise.all(requests);
+        if (!responses[0].ok) throw new Error("Analysis request failed.");
+        const data = await responses[0].json();
+        const change = responses[1]?.ok ? await responses[1].json() : null;
+        if (runId !== sameRunId) return;   // a newer request replaced this one
 
         if (data.status !== "available") {
-            if (takeawayEl) takeawayEl.textContent = data.message || "No data available for this selection.";
-            if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">${escapeHTML(data.message)}</td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #64748b; padding: 24px;">${escapeHTML(data.message || "No data available for this selection.")}</td></tr>`;
             hideCmpExtras();
+            currentComparisonRows = [];
+            refreshStatusCounts();
             return;
         }
 
-        if (takeawayEl) takeawayEl.textContent = data.summary.takeaway;
+        const s = data.summary;
+        updateCard("card1Title", "Planned / Committed");
+        updateCard("card1Value", formatNumber(s.totalA));
+        updateCard("card1Detail", `Committed Units (${data.monthLabel})`);
 
-        if (view === "metrics") {
-            updateCard("card1Title", "Planned / Committed");
-            updateCard("card1Value", formatNumber(data.summary.totalA));
-            updateCard("card1Detail", `Committed Units (${data.monthLabel})`);
+        updateCard("card2Title", "Actual Dispatched");
+        updateCard("card2Value", formatNumber(s.totalB));
+        updateCard("card2Detail", `Shipped Units (${data.monthLabel})`);
 
-            updateCard("card2Title", "Actual Dispatched");
-            updateCard("card2Value", formatNumber(data.summary.totalB));
-            updateCard("card2Detail", `Shipped Units (${data.monthLabel})`);
+        updateCard("card3Title", "Shortfall vs Commitment");
+        updateCard("card3Value", s.grossShortfallQty > 0 ? `-${formatNumber(s.grossShortfallQty)}` : "0");
+        updateCard("card3Detail", `${s.partsShortfall} parts short · ${formatNumber(s.grossSurplusQty)} shipped above plan · net ${s.netDiff < 0 ? "-" : "+"}${formatNumber(Math.abs(s.netDiff))}`);
 
-            const s = data.summary;
-            updateCard("card3Title", "Shortfall vs Commitment");
-            updateCard("card3Value", s.grossShortfallQty > 0 ? `-${formatNumber(s.grossShortfallQty)}` : "0");
-            updateCard("card3Detail", `${s.partsShortfall} parts short · ${formatNumber(s.grossSurplusQty)} shipped above plan · net ${s.netDiff < 0 ? "-" : "+"}${formatNumber(Math.abs(s.netDiff))}`);
+        updateCard("card4Title", "Fulfillment Rate");
+        updateCard("card4Value", `${s.fulfillmentRate.toFixed(1)}%`);
+        updateCard("card4Detail", `${s.partsOnTarget} of ${s.partsOnTarget + s.partsShortfall} scheduled parts on target`);
 
-            updateCard("card4Title", "Fulfillment Rate");
-            updateCard("card4Value", `${s.fulfillmentRate.toFixed(1)}%`);
-            updateCard("card4Detail", `${s.partsOnTarget} of ${s.partsOnTarget + s.partsShortfall} scheduled parts on target`);
+        // merge schedule change (month vs compare month) into the plan-vs-dispatch rows
+        const hasChange = !!compareMonth && change?.status === "available";
+        const changeByKey = new Map();
+        if (hasChange) (change.rows || []).forEach(r => changeByKey.set(rowKey(r), r));
+        currentComparisonRows = (data.rows || []).map(r => {
+            if (!hasChange) return { ...r, scheduleChange: null, schedulePrev: null };
+            const c = changeByKey.get(rowKey(r));
+            return { ...r, scheduleChange: c ? c.change : 0, schedulePrev: c ? c.qtyA : 0 };
+        });
 
-            const titleEl = document.getElementById("comparisonTableTitle");
-            const subEl = document.getElementById("comparisonTableSubtitle");
-            if (titleEl) titleEl.textContent = `Plan vs Dispatch: ${data.sheet.source} (${data.monthLabel})`;
-            if (subEl) subEl.textContent = `Fulfillment and dispatch shortfalls for ${customer === "ALL" ? "All Customers" : customer}`;
+        const thChange = document.getElementById("thColChange");
+        if (thChange) thChange.textContent = hasChange ? `Schedule Δ vs ${change.labelA}` : "Schedule Δ";
 
-            setTableHeader("Committed Qty", "Dispatched Qty", "Difference", "Fulfillment %");
-
-        
-
-            cmpData = data; renderTrendChart(); renderLineTable(); renderDataQualityNote();
-        } else {
-            updateCard("card1Title", `${data.labelA} Demand`);
-            updateCard("card1Value", formatNumber(data.summary.totalA));
-            updateCard("card1Detail", `Baseline Month Total`);
-
-            updateCard("card2Title", `${data.labelB} Demand`);
-            updateCard("card2Value", formatNumber(data.summary.totalB));
-            updateCard("card2Detail", `Comparison Month Total`);
-
-            const netSign = data.summary.netChange >= 0 ? "+" : "";
-            const pctSign = data.summary.percentChange >= 0 ? "+" : "";
-            updateCard("card3Title", "Volume Ramp / Shift");
-            updateCard("card3Value", `${netSign}${formatNumber(data.summary.netChange)}`);
-            updateCard("card3Detail", `${pctSign}${data.summary.percentChange.toFixed(1)}% demand shift`);
-
-            updateCard("card4Title", "Parts Ramped Up / Down");
-            updateCard("card4Value", `↑${data.summary.partsIncreased} / ↓${data.summary.partsDecreased}`);
-            updateCard("card4Detail", `${data.summary.partsUnchanged} parts unchanged`);
-
-            const titleEl = document.getElementById("comparisonTableTitle");
-            const subEl = document.getElementById("comparisonTableSubtitle");
-            if (titleEl) titleEl.textContent = `Horizon Comparison: ${data.labelA} vs ${data.labelB} (${data.sheet.source})`;
-            if (subEl) subEl.textContent = `Volume shifts across delivery months in the same sheet`;
-
-            setTableHeader(`${data.labelA} Qty`, `${data.labelB} Qty`, "Difference (±)", "% Shift");
-
-            
-            hideCmpExtras();
+        const scope = customer === "ALL" ? "All Customers" : customer;
+        let subText = `${scope}${part ? ` · part "${part}"` : ""}`;
+        if (hasChange) {
+            const cs = change.summary;
+            const sign = cs.netChange >= 0 ? "+" : "";
+            subText += ` · Customer schedule ${change.labelB} vs ${change.labelA}: ${sign}${formatNumber(cs.netChange)} units (${sign}${cs.percentChange.toFixed(1)}%), ${cs.partsIncreased} parts up, ${cs.partsDecreased} down`;
         }
+        const titleEl = document.getElementById("comparisonTableTitle");
+        const subEl = document.getElementById("comparisonTableSubtitle");
+        if (titleEl) titleEl.textContent = `Plan vs Dispatch: ${data.sheet.source} (${data.monthLabel})`;
+        if (subEl) subEl.textContent = subText;
 
-        currentComparisonRows = data.rows || [];
+        cmpData = data;
+        renderTrendChart();
+        renderLineTable();
         refreshStatusCounts();
         renderComparisonTable();
     } catch (err) {
         console.error("runSameSheetStreamlined error:", err);
-        if (takeawayEl) takeawayEl.textContent = "Error: " + err.message;
+        showToast("Analysis failed: " + err.message, "error");
+        if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #b91c1c; padding: 24px;">Could not load analysis. ${escapeHTML(err.message)}</td></tr>`;
     }
 }
 
-async function runDiffSheetsStreamlined() {
-    const baseSnapshotId = document.getElementById("baseSheetSelect")?.value;
-    const compareSnapshotId = document.getElementById("compareSheetSelect")?.value;
-    const month = document.getElementById("diffMonthSelect")?.value || "ALL";
-    const customer = document.getElementById("diffCustomerSelect")?.value || "ALL";
-
-    const takeawayEl = document.getElementById("analysisTakeawayText");
-    const tbody = document.getElementById("comparisonTableBody");
-
-    if (!baseSnapshotId || !compareSnapshotId || baseSnapshotId === compareSnapshotId) {
-        if (takeawayEl) takeawayEl.textContent = "Please select two different Excel workbooks to compare.";
-        if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">Please select two different Excel workbooks. If you only have one file, use the 'Analyze Within 1 Excel Sheet' tab.</td></tr>`;
-        return;
-    }
-
-    try {
-        const query = new URLSearchParams({ baseSnapshotId, compareSnapshotId, month, customer });
-        const res = await fetch(apiUrl(`/analytics/compare-different-sheets?${query}`));
-        if (!res.ok) throw new Error("Comparison request failed.");
-        const data = await res.json();
-
-        if (data.status !== "available") {
-            hideCmpExtras();
-            if (takeawayEl) takeawayEl.textContent = data.message || "Comparison unavailable.";
-            if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">${escapeHTML(data.message)}</td></tr>`;
-            return;
-        }
-        hideCmpExtras();
-
-        if (takeawayEl) takeawayEl.textContent = data.summary.takeaway;
-
-        updateCard("card1Title", `Base: ${data.baseSheet.source}`);
-        updateCard("card1Value", formatNumber(data.summary.baseTotal));
-        updateCard("card1Detail", `Baseline Demand (${data.monthLabel})`);
-
-        updateCard("card2Title", `Compare: ${data.compareSheet.source}`);
-        updateCard("card2Value", formatNumber(data.summary.compareTotal));
-        updateCard("card2Detail", `Revised Demand (${data.monthLabel})`);
-
-        const netSign = data.summary.netChange >= 0 ? "+" : "";
-        const pctSign = data.summary.percentChange >= 0 ? "+" : "";
-        updateCard("card3Title", "Net Volume Shift");
-        updateCard("card3Value", `${netSign}${formatNumber(data.summary.netChange)}`);
-        updateCard("card3Detail", `${pctSign}${data.summary.percentChange.toFixed(1)}% vs baseline`);
-
-        updateCard("card4Title", "Demand Volatility (WAPE)");
-        updateCard("card4Value", `${data.summary.wape.toFixed(2)}%`);
-        updateCard("card4Detail", data.summary.stabilityLabel);
-
-        const titleEl = document.getElementById("comparisonTableTitle");
-        const subEl = document.getElementById("comparisonTableSubtitle");
-        if (titleEl) titleEl.textContent = `Revision Comparison: ${data.baseSheet.source} ➔ ${data.compareSheet.source}`;
-        if (subEl) subEl.textContent = `Detailed part-level variances for ${data.monthLabel} (${customer === "ALL" ? "All Customers" : customer})`;
-
-        setTableHeader("Base Qty", "Compare Qty", "Difference (±)", "% Change");
-
-    
-
-        currentComparisonRows = data.rows || [];
-        refreshStatusCounts();
-        renderComparisonTable();
-    } catch (err) {
-        console.error("runDiffSheetsStreamlined error:", err);
-        if (takeawayEl) takeawayEl.textContent = "Error: " + err.message;
-    }
-}
-
-function setTableHeader(colBase, colCompare, colDiff, colPct) {
-    const thBase = document.getElementById("thColBase");
-    const thComp = document.getElementById("thColCompare");
-    const thDiff = document.getElementById("thColDiff");
-    const thPct = document.getElementById("thColPct");
-    if (thBase) thBase.textContent = colBase;
-    if (thComp) thComp.textContent = colCompare;
-    if (thDiff) thDiff.textContent = colDiff;
-    if (thPct) thPct.textContent = colPct;
-}
 
 function updateCard(id, text) {
     const el = document.getElementById(id);
@@ -1171,12 +803,22 @@ function renderComparisonTable() {
     }
 
     if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #94a3b8; padding: 24px;">No matching part records found.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #94a3b8; padding: 24px;">No matching part records found.</td></tr>`;
         const f = document.getElementById("comparisonTableFoot"); if (f) f.innerHTML = "";
         return;
     }
 
-    const isMetricsView = currentStreamlinedMode === "same" && document.getElementById("sameViewMode")?.value === "metrics";
+        if (comparisonSort.key) {
+        const { key, dir } = comparisonSort;
+        const val = r => (r[key] === null || r[key] === undefined ? -Infinity : r[key]);
+        filtered = [...filtered].sort((a, b) => {
+            const av = val(a), bv = val(b);
+            const cmp = av === bv ? 0
+                : (typeof av === "string" && typeof bv === "string") ? av.localeCompare(bv)
+                : av < bv ? -1 : 1;
+            return dir === "asc" ? cmp : -cmp;
+        });
+    }
 
     tbody.innerHTML = filtered.map(row => {
         let statusBadge = "";
@@ -1216,9 +858,12 @@ function renderComparisonTable() {
 
         const diffDisplay = diff > 0 ? `+${formatNumber(diff)}` : formatNumber(diff);
         const pctRaw = row.percentChange ?? row.fulfillmentRate;
-        const pctDisplay = pctRaw == null ? "-"
-            : isMetricsView ? `${pctRaw.toFixed(1)}%`
-            : `${diff > 0 ? "+" : ""}${pctRaw.toFixed(1)}%`;
+        const pctDisplay = pctRaw == null ? "-" : `${pctRaw.toFixed(1)}%`;
+        const chg = row.scheduleChange;
+        const chgClass = chg > 0 ? "diff-positive" : chg < 0 ? "diff-negative" : "diff-neutral";
+        const chgDisplay = chg == null ? "–" : chg > 0 ? `+${formatNumber(chg)}` : formatNumber(chg);
+        const chgTitle = row.schedulePrev == null ? ""
+            : `title="Customer schedule: ${formatNumber(row.schedulePrev)} → ${formatNumber(row.schedulePrev + chg)}"`;
 
         return `<tr>
     <td class="cell-trunc" title="${escapeHTML(row.customer)}"><strong>${escapeHTML(row.customer)}</strong></td>
@@ -1229,6 +874,7 @@ function renderComparisonTable() {
     <td class="num">${formatNumber(valB)}</td>
     <td class="num ${diffClass}">${diffDisplay}</td>
     <td class="num ${diffClass}">${pctDisplay}</td>
+    <td class="num ${chgClass}" ${chgTitle}>${chgDisplay}</td>
     <td>${statusBadge}</td>
 </tr>`;
     }).join("");
@@ -1237,9 +883,12 @@ if (foot) {
     const tA = filtered.reduce((s, r) => s + (r.baseQty ?? r.qtyA ?? 0), 0);
     const tB = filtered.reduce((s, r) => s + (r.compareQty ?? r.qtyB ?? 0), 0);
     const tD = tB - tA;
+    const tC = filtered.reduce((s, r) => s + (r.scheduleChange ?? 0), 0);
+    const anyChange = filtered.some(r => r.scheduleChange != null);
     foot.innerHTML = `<tr class="total-row"><td colspan="4">Total (${filtered.length} parts)</td>
         <td class="num">${formatNumber(tA)}</td><td class="num">${formatNumber(tB)}</td>
-        <td class="num">${tD > 0 ? "+" : ""}${formatNumber(tD)}</td><td></td><td></td></tr>`;
+        <td class="num">${tD > 0 ? "+" : ""}${formatNumber(tD)}</td><td></td>
+        <td class="num">${anyChange ? (tC > 0 ? "+" : "") + formatNumber(tC) : ""}</td><td></td></tr>`;
 }
 }
 
@@ -1248,7 +897,7 @@ function exportComparisonToCSV() {
         showToast("No comparison data available to export.", "error");
         return;
     }
-    const headers = ["Customer", "Part No", "Description", "Line", "Baseline Qty", "Comparison Qty", "Difference", "Rate", "Status"];
+    const headers = ["Customer", "Part No", "Description", "Line", "Baseline Qty", "Comparison Qty", "Difference", "Rate","Schedule Change", "Status"];
     const rows = currentComparisonRows.map(r => [
         `"${(r.customer || "").replace(/"/g, '""')}"`,
         `"${(r.partNo || "").replace(/"/g, '""')}"`,
@@ -1258,6 +907,7 @@ function exportComparisonToCSV() {
         r.compareQty ?? r.qtyB ?? 0,
         r.change ?? r.diff ?? 0,
         (r.percentChange ?? r.fulfillmentRate ?? 0).toFixed(2),
+        r.scheduleChange ?? "",
         `"${r.status}"`
     ]);
 
@@ -1274,138 +924,226 @@ function exportComparisonToCSV() {
     showToast("Comparison report exported successfully!", "success");
 }
 
-function onAnalysisFilterChange() {
-    const month = document.getElementById("analysisMonth");
-    const customer = document.getElementById("analysisCustomerSelect");
-    const dashboardMonth = document.getElementById("dashboardMonth");
-    const dashboardCustomer = document.getElementById("customerSelect");
-
-    if (month && /^\d{4}-\d{2}$/.test(month.value) && dashboardMonth) {
-        dashboardMonth.value = month.value;
-    }
-    activeCustomer = customer ? customer.value : "ALL";
-    if (dashboardCustomer) dashboardCustomer.value = activeCustomer;
-    updateDashboardMonthLabels();
-}
 
 function onDashboardMonthChange() {
     updateDashboardMonthLabels();
-    if (document.getElementById("tab-analysis")?.classList.contains("active")) {
-        refreshHistoricalAnalytics();
-    }
 }
 
 function onCustomerSelectChange() {
     const select = document.getElementById("customerSelect");
     activeCustomer = select ? select.value : "ALL";
     renderDashboardForCustomer(activeCustomer);
-    if (document.getElementById("tab-analysis")?.classList.contains("active")) {
-        refreshHistoricalAnalytics();
-    }
 }
 
-function quickSelectCustomer(custName) {
-    activeCustomer = custName;
-    const select = document.getElementById("customerSelect");
-    if (select) select.value = custName;
-    renderDashboardForCustomer(custName);
+
+// ==========================================================================
+// DASHBOARD (reads the latest uploaded sheet through the analytics API)
+// ==========================================================================
+
+const DASH_TARGET = 95;
+const DASH_COLORS = { "st-green": "#22c55e", "st-amber": "#f59e0b", "st-red": "#ef4444", "st-grey": "#94a3b8" };
+let dashSnapshotId = "";
+let dashRunId = 0;
+
+function renderDashboardForCustomer() {
+    refreshDashboardInsights();
 }
 
-function renderDashboardForCustomer(customer) {
-    let filtered = allScheduleRows;
-    let label = customer;
+function selectDashMonth(month) {
+    const input = document.getElementById("dashboardMonth");
+    if (!input || input.value === month) return;
+    input.value = month;
+    onDashboardMonthChange();
+}
 
-    if (customer === "ALL") {
-        label = "All Customers (Consolidated)";
-        filtered = allScheduleRows;
-    } else if (customer) {
-        filtered = allScheduleRows.filter(r => r.customer === customer);
-        label = customer;
-    }
+function renderDashboardEmpty(message) {
+    ["dashSchedule", "dashDispatched", "dashFulfillment", "dashShortfall"].forEach(id => updateCard(id, "–"));
+    ["dashScheduleSub", "dashDispatchedSub", "dashFulfillmentSub", "dashShortfallSub", "dashTopShortSub"]
+        .forEach(id => updateCard(id, ""));
+    updateCard("dashHeading", "Overview");
+    updateCard("dashSubheading", message);
+    const bar = document.getElementById("dashFulfillmentBar");
+    if (bar) bar.style.width = "0%";
+    const chart = document.getElementById("dashTrendChart");
+    if (chart) chart.innerHTML = `<p class="muted" style="padding:16px 4px">${escapeHTML(message)}</p>`;
+    ["dashShortfallBody", "dashCustomerBody"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = "";
+    });
+}
 
-    // 1. Customer
-    const custEl = document.getElementById("dashboardCustomer");
-    if (custEl) custEl.textContent = label;
-
-    // Selected month schedule
-    const currMonthTotal = filtered.reduce((s, r) =>
-        s + getMonthlyScheduleQuantity(r, getSelectedMonthKey(), r.currentMonth || r.customerSchedule || 0), 0);
-    const currEl = document.getElementById("currentMonth");
-    if (currEl) currEl.textContent = formatNumber(currMonthTotal);
-
-    // Previous month schedule
-    const previousMonthKey = shiftYearMonth(getSelectedMonthKey(), -1);
-    const previousMonthTotal = filtered.reduce((sum, row) =>
-        sum + getMonthlyScheduleQuantity(row, previousMonthKey, row.previousMonth || 0), 0);
-    const previousEl = document.getElementById("previousMonth");
-    if (previousEl) previousEl.textContent = formatNumber(previousMonthTotal);
-
-    const comingMonthKey = shiftYearMonth(getSelectedMonthKey(), 1);
-    const comingMonthTotal = filtered.reduce((sum, row) =>
-        sum + getMonthlyScheduleQuantity(row, comingMonthKey, row.comingMonth || 0), 0);
-    const comingEl = document.getElementById("comingMonth");
-    if (comingEl) comingEl.textContent = formatNumber(comingMonthTotal);
-
-    // Previous month's actual dispatch
-    const actualDispatchTotal = filtered.reduce((s, r) => s + (Number(r.actualDispatch) || 0), 0);
-    const dispEl = document.getElementById("actualDispatch");
-    if (dispEl) dispEl.textContent = formatNumber(actualDispatchTotal);
-
-    const scheduleVariance = currMonthTotal > 0
-        ? ((currMonthTotal - actualDispatchTotal) / currMonthTotal) * 100
-        : 0;
-    const varianceEl = document.getElementById("scheduleVariance");
-    if (varianceEl) varianceEl.textContent = `${scheduleVariance.toFixed(2)}%`;
-
-    // Backlog
-    const latestRows = getLatestScheduleRows(filtered);
-    const backlogRows = latestRows.filter(row =>
-        row.balance !== null && row.balance !== undefined && row.balance !== "" && Number.isFinite(Number(row.balance))
-    );
-    const balanceTotal = backlogRows.reduce((sum, row) => sum + Number(row.balance), 0);
-    const balEl = document.getElementById("balance");
-    if (balEl) balEl.textContent = backlogRows.length ? formatNumber(balanceTotal) : "-";
-
-    const month1Key = getSelectedMonthKey();
-    const month2Key = shiftYearMonth(month1Key, 1);
-    const month3Key = shiftYearMonth(month1Key, 2);
-
-    // Dashboard snapshot table
-    const tableBody = document.getElementById("scheduleTable");
-    if (tableBody) {
-        if (!filtered.length) {
-            tableBody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #94a3b8;">No schedules recorded for ${escapeHTML(label)}</td></tr>`;
-        } else {
-            tableBody.innerHTML = filtered.slice(0, 10).map((r, idx) => `
-                <tr>
-                    <td>${escapeHTML(r.serialNo || idx + 1)}</td>
-                    <td><strong>${escapeHTML(r.customerGroup || r.customer || "-")}</strong></td>
-                    <td>${escapeHTML(r.customerCode || "-")}</td>
-                    <td><span class="part-chip">${escapeHTML(r.partNo || "-")}</span></td>
-                    <td>${escapeHTML(r.helper || "-")}</td>
-                    <td>${escapeHTML(r.customerPartNo || "-")}</td>
-                    <td>${escapeHTML(r.line || "-")}</td>
-                    <td class="cell-trunc" title="${escapeHTML(r.productDescription || "")}">${escapeHTML(r.productDescription || "–")}</td>
-                    <td class="num">${formatNumber(getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0))}</td>
-                    <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0))}</td>
-                    <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month3Key, 0))}</td>
-                </tr>
-            `).join("");
+async function refreshDashboardInsights() {
+    const runId = ++dashRunId;
+    const month = getSelectedMonthKey();
+    const customer = activeCustomer || "ALL";
+    try {
+        if (!dashSnapshotId) {
+            const metaRes = await fetch(apiUrl("/analytics/comparison-meta"));
+            if (!metaRes.ok) throw new Error("Could not load schedule sheets.");
+            const meta = await metaRes.json();
+            dashSnapshotId = meta.currentSnapshotId || "";
         }
+        if (runId !== dashRunId) return;
+        if (!dashSnapshotId) {
+            renderDashboardEmpty("No schedule uploaded yet. Use the Upload tab to import an Excel file.");
+            return;
+        }
+
+        const query = new URLSearchParams({
+            snapshotId: dashSnapshotId, mode: "metrics",
+            metricA: "commitment", metricB: "dispatch",
+            month, customer, range: "6"
+        });
+        const res = await fetch(apiUrl(`/analytics/compare-within-sheet?${query}`));
+        if (!res.ok) throw new Error("Dashboard request failed.");
+        const data = await res.json();
+        if (runId !== dashRunId) return;
+
+        if (data.status !== "available") {
+            renderDashboardEmpty(data.message || "No data available for this selection.");
+            return;
+        }
+        paintDashboard(data, customer);
+    } catch (err) {
+        if (runId !== dashRunId) return;
+        console.error("refreshDashboardInsights error:", err);
+        renderDashboardEmpty("Could not load dashboard data. Check that the backend is running.");
+    }
+}
+
+function paintDashboard(data, customer) {
+    const s = data.summary;
+    const trend = data.monthlyTrend || [];
+    const demand = data.demandCoverage ? data.demandCoverage.customerDemand : 0;
+    const prev = trend.find(m => m.month === shiftYearMonth(data.month, -1));
+
+    updateCard("dashHeading", `${customer === "ALL" ? "All customers" : customer} · ${data.monthLabel}`);
+    updateCard("dashSubheading", `Source: ${data.sheet.source}${data.sheet.date ? ` (${data.sheet.date})` : ""}`);
+
+    // card 1: customer schedule + change vs previous month
+    updateCard("dashSchedule", formatNumber(demand));
+    if (prev && prev.hasData) {
+        const delta = demand - prev.actualCustomerSchedule;
+        const pct = prev.actualCustomerSchedule > 0 ? ` (${delta >= 0 ? "+" : ""}${((delta / prev.actualCustomerSchedule) * 100).toFixed(1)}%)` : "";
+        updateCard("dashScheduleSub", `${delta >= 0 ? "+" : ""}${formatNumber(delta)}${pct} vs ${prev.label}`);
+    } else {
+        updateCard("dashScheduleSub", "No previous-month data");
     }
 
-    // Update KPI strip
-    const suppliedAchievements = filtered
-        .filter(row => row.achievement !== null && row.achievement !== undefined && row.achievement !== "")
-        .map(row => Number(row.achievement))
-        .filter(Number.isFinite);
-    const achievement = suppliedAchievements.length
-        ? suppliedAchievements.reduce((sum, value) => sum + value, 0) / suppliedAchievements.length
-        : currMonthTotal > 0 ? (actualDispatchTotal / currMonthTotal) * 100 : 0;
-    updateDashboardKpiStrip(achievement);
-    if (document.getElementById("tab-analysis")?.classList.contains("active")) {
-        refreshHistoricalAnalytics();
+    // card 2: dispatched
+    updateCard("dashDispatched", formatNumber(s.totalB));
+    updateCard("dashDispatchedSub", `of ${formatNumber(s.totalA)} committed`);
+
+    // card 3: fulfillment + bar
+    const hasPlan = s.totalA > 0;
+    const rate = hasPlan ? s.fulfillmentRate : null;
+    const st = cmpStatus(rate, DASH_TARGET);
+    updateCard("dashFulfillment", hasPlan ? `${rate.toFixed(1)}%` : "–");
+    updateCard("dashFulfillmentSub", hasPlan ? `Target ${DASH_TARGET}% · ${st.label}` : "No commitment this month");
+    const bar = document.getElementById("dashFulfillmentBar");
+    if (bar) {
+        bar.style.width = `${hasPlan ? Math.min(rate, 100) : 0}%`;
+        bar.style.background = DASH_COLORS[st.cls];
     }
+
+    // card 4: shortfall
+    updateCard("dashShortfall", s.grossShortfallQty > 0 ? `-${formatNumber(s.grossShortfallQty)}` : "0");
+    updateCard("dashShortfallSub", `${s.partsShortfall} parts short · ${formatNumber(s.grossSurplusQty)} above plan`);
+
+    renderDashTrend(trend, data.month);
+
+    // top 5 shortfall parts
+    const short = (data.rows || [])
+        .filter(r => r.qtyA > 0 && r.diff < 0)
+        .sort((a, b) => a.diff - b.diff);
+    updateCard("dashTopShortSub", `Showing ${Math.min(5, short.length)} of ${short.length} short parts · ${data.monthLabel}`);
+    const body = document.getElementById("dashShortfallBody");
+    if (body) {
+        body.innerHTML = short.length
+            ? short.slice(0, 5).map(r => `<tr>
+                <td><span class="part-chip">${escapeHTML(r.partNo)}</span></td>
+                <td class="cell-trunc" title="${escapeHTML(r.customer)}">${escapeHTML(r.customer)}</td>
+                <td class="num">${formatNumber(r.qtyA)}</td>
+                <td class="num">${formatNumber(r.qtyB)}</td>
+                <td class="num neg">${formatNumber(r.diff)}</td>
+                <td>${rateCell(r.fulfillmentRate, cmpStatus(r.fulfillmentRate, DASH_TARGET))}</td>
+            </tr>`).join("")
+            : `<tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px;">No parts are short for this month.</td></tr>`;
+    }
+
+    // by customer (only when viewing all customers)
+    const custPanel = document.getElementById("dashCustomerPanel");
+    const twoCol = document.getElementById("dashTwoCol");
+    const showCust = customer === "ALL";
+    if (custPanel) custPanel.style.display = showCust ? "block" : "none";
+    if (twoCol) twoCol.classList.toggle("single", !showCust);
+    const custBody = document.getElementById("dashCustomerBody");
+    if (custBody && showCust) {
+        const list = (data.byCustomer || []).slice()
+            .sort((a, b) => (a.fillRate ?? 1e9) - (b.fillRate ?? 1e9));
+        custBody.innerHTML = list.length
+            ? list.map(c => `<tr>
+                <td class="cell-trunc" title="${escapeHTML(c.customer)}"><strong>${escapeHTML(c.customer)}</strong></td>
+                <td class="num">${formatNumber(c.commitment)}</td>
+                <td class="num">${formatNumber(c.dispatched)}</td>
+                <td>${rateCell(c.fillRate, cmpStatus(c.fillRate, DASH_TARGET))}</td>
+            </tr>`).join("")
+            : `<tr><td colspan="4" style="text-align:center;color:#64748b;padding:20px;">No customer data for this month.</td></tr>`;
+    }
+}
+
+function renderDashTrend(trend, selectedMonth) {
+    const box = document.getElementById("dashTrendChart");
+    if (!box) return;
+    if (!trend.length) {
+        box.innerHTML = `<p class="muted" style="padding:16px 4px">No trend data for this selection.</p>`;
+        return;
+    }
+    const W = 760, H = 250, pl = 44, pr = 12, pt = 12, pb = 66;
+    const pw = W - pl - pr, ph = H - pt - pb;
+    const maxY = niceCeil(Math.max(1, ...trend.flatMap(m => [m.actualCustomerSchedule, m.commitment, m.dispatched])));
+    const y = v => pt + ph - (v / maxY) * ph;
+    const slot = pw / trend.length;
+    const gw = Math.min(slot * 0.62, 110), bw = gw / 3;
+    const chipW = Math.min(54, slot - 6);
+    const axis = v => v >= 1000 ? `${+(v / 1000).toFixed(1)}k` : `${Math.round(v)}`;
+
+    const grid = [0, 0.5, 1].map(f => {
+        const v = maxY * f;
+        return `<line class="grid" x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}"/>` +
+               `<text x="${pl - 8}" y="${y(v) + 4}" text-anchor="end">${axis(v)}</text>`;
+    }).join("");
+
+    const groups = trend.map((m, i) => {
+        const cx = pl + slot * i + slot / 2, x0 = cx - gw / 2;
+        const st = cmpStatus(m.fillRateVsCommitment, DASH_TARGET);
+        const rateText = m.fillRateVsCommitment == null ? "–" : `${m.fillRateVsCommitment.toFixed(1)}%`;
+        const bar = (v, cls, j) =>
+            `<rect class="${cls}" x="${x0 + bw * j + 1}" y="${y(v)}" width="${bw - 2}" height="${Math.max(pt + ph - y(v), 0)}" rx="2"/>`;
+        const tip = m.hasData
+            ? `${m.label}\nCustomer demand: ${formatNumber(m.actualCustomerSchedule)}\nIFB commitment: ${formatNumber(m.commitment)}\nDispatched: ${formatNumber(m.dispatched)}\nFill rate: ${rateText}`
+            : `${m.label}\nNo data for this selection`;
+        return `<g class="cmp-month${m.month === selectedMonth ? " is-selected" : ""}${m.hasData ? "" : " is-empty"}" data-month="${escapeHTML(m.month)}">
+            <title>${escapeHTML(tip)}</title>
+            <rect class="slot-bg" x="${cx - slot / 2 + 2}" y="${pt}" width="${slot - 4}" height="${H - pt - 4}" rx="6"/>
+            ${bar(m.actualCustomerSchedule, "bar-demand", 0)}${bar(m.commitment, "bar-commit", 1)}${bar(m.dispatched, "bar-disp", 2)}
+            <text class="month-label" x="${cx}" y="${pt + ph + 18}" text-anchor="middle">${escapeHTML(m.label)}</text>
+            <rect class="chip-bg ${st.cls}" x="${cx - chipW / 2}" y="${pt + ph + 28}" width="${chipW}" height="20" rx="10"/>
+            <text class="chip-txt ${st.cls}" x="${cx}" y="${pt + ph + 42}" text-anchor="middle">${rateText}</text>
+        </g>`;
+    }).join("");
+
+    box.innerHTML = `
+        <div class="cmp-legend">
+            <span><i class="lg bar-demand"></i>Customer demand</span>
+            <span><i class="lg bar-commit"></i>IFB commitment</span>
+            <span><i class="lg bar-disp"></i>Dispatched</span>
+        </div>
+        <svg class="cmp-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Six month demand, commitment and dispatch">
+            ${grid}${groups}
+        </svg>`;
+    box.querySelectorAll(".cmp-month:not(.is-empty)").forEach(g =>
+        g.addEventListener("click", () => selectDashMonth(g.dataset.month)));
 }
 
 // ==========================================================================
@@ -1589,6 +1327,7 @@ async function loadImportedFilesList() {
                     <td>${escapeHTML(dateStr)}</td>
                     <td><span class="badge-accent">${formatNumber(file.rowCount)} rows</span></td>
                     <td style="text-align: center; white-space: nowrap;">
+                        <button type="button" class="btn-action-icon" data-id="${escapeHTML(file.snapshotId)}" data-name="${escapeHTML(file.source || file.filename)}" onclick="checkDataQuality(this.dataset.id, this.dataset.name)" title="Check data quality">🩺</button>
                         <button type="button" class="btn-action-icon" data-id="${escapeHTML(file.snapshotId)}" onclick="downloadImportedFile(this.dataset.id)" title="Download Excel File">📥</button>
                         <button type="button" class="btn-action-icon btn-delete-row" data-id="${escapeHTML(file.snapshotId)}" data-name="${escapeHTML(file.source || file.filename)}" onclick="deleteImportedFile(this.dataset.id, this.dataset.name)" title="Delete File & Snapshot">🗑️</button>
                     </td>
@@ -1616,6 +1355,7 @@ async function deleteImportedFile(snapshotId, filename) {
         if (!res.ok) throw new Error("Failed to delete snapshot.");
         const result = await res.json();
         showToast("Workbook & snapshot deleted successfully", "success");
+        dashSnapshotId = "";
 
         if (Array.isArray(result.rows)) {
             allScheduleRows = result.rows;
@@ -1741,6 +1481,7 @@ async function uploadExcel() {
             }
 
             allScheduleRows = importedRows;
+            dashSnapshotId = "";
             await loadMasterData();
             activeCustomer = "ALL";
             renderDashboardForCustomer(activeCustomer);

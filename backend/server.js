@@ -7,8 +7,6 @@ const path = require("path");
 const oracledb = require("oracledb");
 const dbConfig = require("./dbconfig");
 const {
-    calculateScheduleAnalytics,
-    getDemandSnapshotTimeline,
     compareDifferentSheets,
     compareWithinSameSheet,
     getSnapshotComparisonMeta
@@ -869,51 +867,14 @@ app.get("/dashboard", (req, res) => {
     });
 });
 
-app.get("/analytics/historical", (req, res) => {
-    const month = String(req.query.month || "");
-    const customer = String(req.query.customer || "ALL");
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
-        return res.status(400).json({ message: "A valid delivery month is required (YYYY-MM)." });
-    }
-    return res.json(calculateScheduleAnalytics(
-        scheduleSnapshots,
-        month,
-        customer,
-        new Date(),
-        {
-            previousSnapshotId: String(req.query.previousSnapshotId || ""),
-            currentSnapshotId: String(req.query.currentSnapshotId || "")
-        }
-    ));
-});
-
-app.get("/analytics/snapshots", (req, res) => {
-    const month = String(req.query.month || "");
-    const customer = String(req.query.customer || "ALL");
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
-        return res.status(400).json({ message: "A valid delivery month is required (YYYY-MM)." });
-    }
-    return res.json({
-        snapshots: getDemandSnapshotTimeline(scheduleSnapshots, month, customer)
-    });
-});
-
-app.get("/analytics/compare-different-sheets", (req, res) => {
-    const { baseSnapshotId, compareSnapshotId, month, customer } = req.query;
-    const result = compareDifferentSheets(scheduleSnapshots, {
-        baseSnapshotId: baseSnapshotId ? String(baseSnapshotId) : undefined,
-        compareSnapshotId: compareSnapshotId ? String(compareSnapshotId) : undefined,
-        month: month ? String(month) : "ALL",
-        customer: customer ? String(customer) : "ALL"
-    });
-    return res.json(result);
-});
 
 app.get("/analytics/compare-within-sheet", (req, res) => {
-    const { snapshotId, mode, monthA, monthB, metricA, metricB, month, customer } = req.query;
+    const { snapshotId, mode, monthA, monthB, metricA, metricB, month, customer, part, range } = req.query;
     const result = compareWithinSameSheet(scheduleSnapshots, {
         snapshotId: snapshotId ? String(snapshotId) : undefined,
+        part: part ? String(part) : "",
         mode: mode ? String(mode) : "months",
+        range: range ? String(range) : "6",
         monthA: monthA ? String(monthA) : undefined,
         monthB: monthB ? String(monthB) : undefined,
         metricA: metricA ? String(metricA) : "commitment",

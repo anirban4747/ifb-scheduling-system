@@ -431,207 +431,6 @@ function formatMonthLabel(monthKey) {
     return monthKey;
 }
 
-function getDemandTotal(row, month) {
-    if (month && month !== "ALL") {
-        return getDemandForMonth(row, month);
-    }
-    if (row.monthlySchedules && typeof row.monthlySchedules === "object") {
-        const values = Object.values(row.monthlySchedules).map(Number).filter(Number.isFinite);
-        if (values.length > 0) {
-            return values.reduce((sum, v) => sum + v, 0);
-        }
-    }
-    const fallback = Number(row.currentCustomerSchedule ?? row.currentMonth ?? row.customerSchedule);
-    return Number.isFinite(fallback) ? fallback : 0;
-}
-
-function compareDifferentSheets(snapshots, options = {}) {
-    if (!snapshots || snapshots.length === 0) {
-        return {
-            status: "no_snapshots",
-            message: "No schedule sheets have been uploaded yet. Upload Excel files to begin comparison.",
-            summary: null,
-            rows: []
-        };
-    }
-
-    const { baseSnapshotId, compareSnapshotId, month = "ALL", customer = "ALL" } = options;
-
-    let baseSnap = baseSnapshotId ? snapshots.find(s => s.snapshotId === baseSnapshotId) : null;
-    let compareSnap = compareSnapshotId ? snapshots.find(s => s.snapshotId === compareSnapshotId) : null;
-
-    if (!baseSnap && snapshots.length >= 2) {
-        baseSnap = snapshots[snapshots.length - 2];
-    } else if (!baseSnap && snapshots.length === 1) {
-        baseSnap = snapshots[0];
-    }
-
-    if (!compareSnap && snapshots.length >= 2) {
-        compareSnap = snapshots[snapshots.length - 1];
-    } else if (!compareSnap && snapshots.length === 1) {
-        compareSnap = snapshots[0];
-    }
-
-    if (!baseSnap || !compareSnap) {
-        return {
-            status: "needs_selection",
-            message: "Please select two Excel sheets to compare.",
-            summary: null,
-            rows: []
-        };
-    }
-
-    const baseRows = (baseSnap.rows || []).filter(r => matchesCustomer(r, customer));
-    const compareRows = (compareSnap.rows || []).filter(r => matchesCustomer(r, customer));
-
-    const baseEntityMap = new Map();
-    for (const row of baseRows) {
-        const qty = getDemandTotal(row, month);
-        if (qty === null) continue;
-        const key = getEntityKey(row);
-        if (key === "||||") continue;
-        const existing = baseEntityMap.get(key);
-        if (!existing || isHigherVersion(row.version, existing.row.version)) {
-            baseEntityMap.set(key, { row, demand: qty });
-        }
-    }
-
-    const compareEntityMap = new Map();
-    for (const row of compareRows) {
-        const qty = getDemandTotal(row, month);
-        if (qty === null) continue;
-        const key = getEntityKey(row);
-        if (key === "||||") continue;
-        const existing = compareEntityMap.get(key);
-        if (!existing || isHigherVersion(row.version, existing.row.version)) {
-            compareEntityMap.set(key, { row, demand: qty });
-        }
-    }
-
-    const allKeys = new Set([...baseEntityMap.keys(), ...compareEntityMap.keys()]);
-    let baseTotal = 0;
-    let compareTotal = 0;
-    let absoluteDiffSum = 0;
-    let partsIncreased = 0;
-    let partsDecreased = 0;
-    let partsUnchanged = 0;
-    let partsAdded = 0;
-    let partsRemoved = 0;
-
-    const rows = [];
-    for (const key of allKeys) {
-        const b = baseEntityMap.get(key);
-        const c = compareEntityMap.get(key);
-        const baseQty = b ? b.demand : 0;
-        const compareQty = c ? c.demand : 0;
-        const row = c?.row || b?.row;
-
-        baseTotal += baseQty;
-        compareTotal += compareQty;
-        const change = compareQty - baseQty;
-        absoluteDiffSum += Math.abs(change);
-
-        let status = "unchanged";
-        if (!b && c && compareQty > 0) {
-            status = "added";
-            partsAdded++;
-        } else if (b && (!c || compareQty === 0) && baseQty > 0) {
-            status = "removed";
-            partsRemoved++;
-        } else if (change > 0) {
-            status = "increased";
-            partsIncreased++;
-        } else if (change < 0) {
-            status = "decreased";
-            partsDecreased++;
-        } else {
-            partsUnchanged++;
-        }
-
-        const percentChange = baseQty > 0
-            ? ((compareQty - baseQty) / baseQty) * 100
-            : (compareQty > 0 ? 100 : 0);
-
-        rows.push({
-            customer: row.customer || row.customerCode || "Unknown",
-            customerCode: row.customerCode || "",
-            partNo: row.partNo || "-",
-            customerPartNo: row.customerPartNo || "-",
-            productDescription: row.productDescription || "-",
-            line: row.line || "-",
-            baseQty,
-            compareQty,
-            change,
-            percentChange,
-            status
-        });
-    }
-
-    rows.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
-
-    const netChange = compareTotal - baseTotal;
-    const percentChange = baseTotal > 0 ? (netChange / baseTotal) * 100 : (compareTotal > 0 ? 100 : 0);
-    const wape = compareTotal > 0 ? (absoluteDiffSum / compareTotal) * 100 : (baseTotal > 0 ? (absoluteDiffSum / baseTotal) * 100 : 0);
-
-    let stabilityLabel = "High Stability (Minimal Changes)";
-    let stabilityClass = "stable";
-    if (wape > 25) {
-        stabilityLabel = "High Volatility (Major Plan Shifts)";
-        stabilityClass = "high-volatility";
-    } else if (wape > 10) {
-        stabilityLabel = "Moderate Volatility";
-        stabilityClass = "moderate";
-    } else if (wape > 2) {
-        stabilityLabel = "Low Volatility (Minor Adjustments)";
-        stabilityClass = "low-volatility";
-    }
-
-    const monthDisplay = formatMonthLabel(month);
-    let takeaway = "";
-    if (allKeys.size === 0) {
-        takeaway = `No schedule demand found for ${monthDisplay} and selected customer.`;
-    } else if (netChange === 0 && partsIncreased === 0 && partsDecreased === 0 && partsAdded === 0 && partsRemoved === 0) {
-        takeaway = `Both sheets have identical demand (${formatNumberEn(compareTotal)} units) for ${monthDisplay}. No quantity changes were detected across all ${allKeys.size} parts.`;
-    } else {
-        const changeSign = netChange >= 0 ? "+" : "";
-        takeaway = `Overall demand shifted from ${formatNumberEn(baseTotal)} to ${formatNumberEn(compareTotal)} units (${changeSign}${formatNumberEn(netChange)} units or ${changeSign}${percentChange.toFixed(1)}%) for ${monthDisplay}. Out of ${allKeys.size} parts compared: ${partsIncreased} increased, ${partsDecreased} decreased${partsAdded ? `, ${partsAdded} newly introduced` : ""}${partsRemoved ? `, ${partsRemoved} removed` : ""}.`;
-    }
-    
-
-    return {
-        status: "available",
-        baseSheet: {
-            snapshotId: baseSnap.snapshotId,
-            source: baseSnap.source || "Sheet A",
-            date: baseSnap.snapshotDate || baseSnap.capturedAt?.slice(0, 10) || ""
-        },
-        compareSheet: {
-            snapshotId: compareSnap.snapshotId,
-            source: compareSnap.source || "Sheet B",
-            date: compareSnap.snapshotDate || compareSnap.capturedAt?.slice(0, 10) || ""
-        },
-        month,
-        monthLabel: monthDisplay,
-        customer,
-        summary: {
-            baseTotal,
-            compareTotal,
-            netChange,
-            percentChange,
-            wape,
-            stabilityLabel,
-            stabilityClass,
-            partsTotal: allKeys.size,
-            partsIncreased,
-            partsDecreased,
-            partsUnchanged,
-            partsAdded,
-            partsRemoved,
-            takeaway
-        },
-        rows
-    };
-}
 
 function sumField(obj) {
     if (!obj || typeof obj !== "object") return null;
@@ -668,6 +467,12 @@ const METRIC_LABELS = {
     originalSchedule: "Original Schedule"
 };
 
+function shiftMonthKey(monthKey, offset) {
+    const [y, m] = monthKey.split("-").map(Number);
+    const d = new Date(Date.UTC(y, m - 1 + offset, 1));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 function compareWithinSameSheet(snapshots, options = {}) {
     if (!snapshots || snapshots.length === 0) {
         return {
@@ -680,6 +485,8 @@ function compareWithinSameSheet(snapshots, options = {}) {
 
     const {
         snapshotId,
+        part = "",
+        range = 6,
         mode = "months",
         monthA,
         monthB,
@@ -703,7 +510,12 @@ function compareWithinSameSheet(snapshots, options = {}) {
         };
     }
 
-    const matchedRows = (targetSnap.rows || []).filter(r => matchesCustomer(r, customer));
+    const partFilter = String(part || "").trim().toLowerCase();
+    const matchedRows = (targetSnap.rows || []).filter(r =>
+        matchesCustomer(r, customer) &&
+        (!partFilter
+            || String(r.partNo || "").toLowerCase().includes(partFilter)
+            || String(r.customerPartNo || "").toLowerCase().includes(partFilter)));
 
     if (mode === "months") {
         const allMonthsInSheet = new Set();
@@ -864,7 +676,20 @@ function compareWithinSameSheet(snapshots, options = {}) {
         }
         const sortedMonths = Array.from(allMonths).sort();
 
-        const monthlyTrend = sortedMonths.map(m => {
+        const rangeMonths = Number(range) === 12 ? 12 : 6;
+        const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : "";
+        let windowEnd = sortedMonths.length ? sortedMonths[sortedMonths.length - 1] : validMonth;
+        if (validMonth && (!windowEnd || validMonth > windowEnd)) windowEnd = validMonth;
+        let windowStart = windowEnd ? shiftMonthKey(windowEnd, -(rangeMonths - 1)) : "";
+        if (validMonth && validMonth < windowStart) {
+            windowStart = validMonth;
+            windowEnd = shiftMonthKey(validMonth, rangeMonths - 1);
+        }
+        const windowMonths = windowEnd
+            ? Array.from({ length: rangeMonths }, (_, i) => shiftMonthKey(windowStart, i))
+            : [];
+
+        const monthlyTrend = windowMonths.map(m => {
             let actCustSched = 0, commitment = 0, dispatched = 0;
             let grossShortfall = 0, grossSurplus = 0;
             for (const row of allEntityRows) {
@@ -889,7 +714,8 @@ function compareWithinSameSheet(snapshots, options = {}) {
                 fillRateVsCommitment: commitment > 0 ? Math.round((dispatched / commitment) * 1000) / 10 : null,
                 fillRateVsCustomer: actCustSched > 0 ? Math.round((dispatched / actCustSched) * 1000) / 10 : null,
                 grossShortfall,
-                grossSurplus
+                grossSurplus,
+                hasData: actCustSched > 0 || commitment > 0 || dispatched > 0
             };
         });
 
@@ -933,6 +759,30 @@ function compareWithinSameSheet(snapshots, options = {}) {
             partsTotal: l.parts.size,
             partsOnTarget: l.partsOnTarget
         })) : [];
+
+                // ---- byCustomer for the selected month ----
+        const customerMap = new Map();
+        for (const row of allEntityRows) {
+            if (month === "ALL") break;
+            const com = row.monthlyCommitments && Object.prototype.hasOwnProperty.call(row.monthlyCommitments, month)
+                ? Number(row.monthlyCommitments[month]) : 0;
+            const disp = row.monthlyDispatches && Object.prototype.hasOwnProperty.call(row.monthlyDispatches, month)
+                ? Number(row.monthlyDispatches[month]) : 0;
+            if (com === 0 && disp === 0) continue;
+            const name = row.customer || row.customerCode || "Unknown";
+            if (!customerMap.has(name)) {
+                customerMap.set(name, { customer: name, commitment: 0, dispatched: 0, grossShortfall: 0, partsShort: 0 });
+            }
+            const b = customerMap.get(name);
+            b.commitment += com;
+            b.dispatched += disp;
+            b.grossShortfall += Math.max(com - disp, 0);
+            if (com > 0 && disp < com) b.partsShort += 1;
+        }
+        const byCustomer = Array.from(customerMap.values()).map(c => ({
+            ...c,
+            fillRate: c.commitment > 0 ? Math.round((c.dispatched / c.commitment) * 1000) / 10 : null
+        }));
 
         // ---- New: demandCoverage for the selected month ----
         let customerDemand = 0, demandCommitment = 0, demandDispatched = 0;
@@ -1050,6 +900,7 @@ function compareWithinSameSheet(snapshots, options = {}) {
             monthLabel,
             monthlyTrend,
             byLine,
+            byCustomer,
             demandCoverage,
             dataQuality,
             summary: {
@@ -1105,6 +956,7 @@ function getSnapshotComparisonMeta(snapshots, snapshotId) {
     const months = new Set();
     const customers = new Set();
     if (targetSnap) {
+        const parts = new Map();
         (targetSnap.rows || []).forEach(r => {
             if (r.monthlySchedules) {
                 Object.keys(r.monthlySchedules).forEach(m => months.add(m));
@@ -1113,6 +965,7 @@ function getSnapshotComparisonMeta(snapshots, snapshotId) {
             if (dm) months.add(dm);
             const cust = r.customerGroup || r.customer || r.customerCode;
             if (cust) customers.add(cust);
+            if (r.partNo && !parts.has(r.partNo)) parts.set(r.partNo, r.productDescription || "");
         });
     }
 
@@ -1135,6 +988,7 @@ function getSnapshotComparisonMeta(snapshots, snapshotId) {
         currentSnapshotId: targetSnap?.snapshotId || "",
         availableMonths: Array.from(months).sort(),
         availableCustomers: Array.from(customers).sort(),
+        availableParts: Array.from(parts, ([partNo, description]) => ({ partNo, description })).sort((a, b) => a.partNo.localeCompare(b.partNo)),
         allMonths: Array.from(allMonths).sort(),
         allCustomers: Array.from(allCustomers).sort(),
         availableMetrics: [
@@ -1152,7 +1006,6 @@ module.exports = {
     calculateDemandRevisionWape,
     calculateOnTime,
     getDemandSnapshotTimeline,
-    compareDifferentSheets,
     compareWithinSameSheet,
     getSnapshotComparisonMeta
 };
