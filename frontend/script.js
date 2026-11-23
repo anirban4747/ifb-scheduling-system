@@ -395,8 +395,6 @@ async function loadComparisonMeta(selectedSnapshotId) {
         }
 
         const optionsHtml = snapshots.map(formatSnapOption).join("");
-        const oldBase = baseSel?.value;
-        const oldComp = compSel?.value;
         const oldSame = sameSel?.value;
 
         if (sameSel) {
@@ -556,7 +554,7 @@ function renderTrendChart() {
             ${grid}${groups}
         </svg>
         ${summary}`;
-    box.querySelectorAll("[data-month]").forEach(g =>
+    box.querySelectorAll(".cmp-month:not(.is-empty)").forEach(g =>
         g.addEventListener("click", () => selectTrendMonth(g.dataset.month)));
 }
 
@@ -974,7 +972,6 @@ function renderDashboardEmpty(message) {
 
 async function refreshDashboardInsights() {
     const runId = ++dashRunId;
-    const month = getSelectedMonthKey();
     const customer = activeCustomer || "ALL";
     try {
         if (!dashSnapshotId) {
@@ -984,6 +981,7 @@ async function refreshDashboardInsights() {
             dashSnapshotId = meta.currentSnapshotId || "";
         }
         if (runId !== dashRunId) return;
+        const month = getSelectedMonthKey();
         if (!dashSnapshotId) {
             renderDashboardEmpty("No schedule uploaded yet. Use the Upload tab to import an Excel file.");
             return;

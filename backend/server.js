@@ -7,7 +7,6 @@ const path = require("path");
 const oracledb = require("oracledb");
 const dbConfig = require("./dbconfig");
 const {
-    compareDifferentSheets,
     compareWithinSameSheet,
     getSnapshotComparisonMeta
 } = require("./schedule-analytics");

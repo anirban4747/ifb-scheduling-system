@@ -955,8 +955,8 @@ function getSnapshotComparisonMeta(snapshots, snapshotId) {
 
     const months = new Set();
     const customers = new Set();
+    const parts = new Map();
     if (targetSnap) {
-        const parts = new Map();
         (targetSnap.rows || []).forEach(r => {
             if (r.monthlySchedules) {
                 Object.keys(r.monthlySchedules).forEach(m => months.add(m));
