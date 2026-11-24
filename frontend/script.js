@@ -663,37 +663,27 @@ async function checkDataQuality(snapshotId, name) {
 let sameRunId = 0;
 let comparisonSort = { key: "diff", dir: "asc" };
 
-let compareTarget = "commitment";   // "commitment" | "dispatch"
 let analysisRawRows = [];
 
-function setCompareTarget(target) {
-    compareTarget = target === "dispatch" ? "dispatch" : "commitment";
-    document.querySelectorAll("#cmpTargetToggle button").forEach(b =>
-        b.classList.toggle("active", b.dataset.target === compareTarget));
-    applyCompareTarget();
-}
-
 function applyCompareTarget() {
-    const isDispatch = compareTarget === "dispatch";
     currentComparisonRows = analysisRawRows.map(r => {
-        const request = Number(r.qtySchedule) || 0;
-        const target = Number(isDispatch ? r.qtyDispatch : r.qtyCommitment) || 0;
-        const diff = target - request;
+        const schedule = Number(r.qtySchedule) || 0;
+        const commitment = Number(r.qtyCommitment) || 0;
+        const dispatch = Number(r.qtyDispatch) || 0;
+        const diff = dispatch - commitment;
         let status = diff < 0 ? "shortfall" : diff > 0 ? "surplus" : "fulfilled";
-        if (request <= 0 && target > 0) status = "unscheduled";
+        if (commitment <= 0 && dispatch > 0) status = "unscheduled";
+        else if (commitment <= 0 && dispatch <= 0) status = "no_commitment";
         return {
             ...r,
-            qtyA: request,
-            qtyB: target,
+            qtySchedule: schedule,
+            qtyCommitment: commitment,
+            qtyDispatch: dispatch,
             diff,
-            fulfillmentRate: request > 0 ? (target / request) * 100 : null,
+            achievementRate: commitment > 0 ? (dispatch / commitment) * 100 : null,
             status
         };
     });
-    updateCard("thColBase", "Customer Request");
-    updateCard("thColCompare", isDispatch ? "IFB Dispatch" : "IFB Commitment");
-    updateCard("thColDiff", "Difference");
-    updateCard("thColPct", "Fill %");
     refreshStatusCounts();
     renderComparisonTable();
 }
@@ -870,12 +860,12 @@ function renderComparisonTable() {
     }
 
     if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #94a3b8; padding: 24px;">No matching part records found.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #94a3b8; padding: 24px;">No matching part records found.</td></tr>`;
         const f = document.getElementById("comparisonTableFoot"); if (f) f.innerHTML = "";
         return;
     }
 
-        if (comparisonSort.key) {
+    if (comparisonSort.key) {
         const { key, dir } = comparisonSort;
         const val = r => (r[key] === null || r[key] === undefined ? -Infinity : r[key]);
         filtered = [...filtered].sort((a, b) => {
@@ -890,42 +880,30 @@ function renderComparisonTable() {
     tbody.innerHTML = filtered.map(row => {
         let statusBadge = "";
         let diffClass = "diff-neutral";
-        const valA = row.baseQty ?? row.qtyA ?? 0;
-        const valB = row.compareQty ?? row.qtyB ?? 0;
-        const diff = row.change ?? row.diff ?? 0;
+        const diff = row.diff ?? 0;
 
-        if (row.status === "increased") {
-            statusBadge = `<span class="badge-status-inc">Increased ↑</span>`;
-            diffClass = "diff-positive";
-        } else if (row.status === "decreased") {
-            statusBadge = `<span class="badge-status-dec">Decreased ↓</span>`;
-            diffClass = "diff-negative";
-        } else if (row.status === "added") {
-            statusBadge = `<span class="badge-status-new">New Part ★</span>`;
-            diffClass = "diff-positive";
-        } else if (row.status === "removed") {
-            statusBadge = `<span class="badge-status-rem">Removed ✕</span>`;
-            diffClass = "diff-negative";
-        } else if (row.status === "shortfall") {
+        if (row.status === "shortfall") {
             statusBadge = `<span class="badge-status-shortfall">Shortfall ⚠️</span>`;
             diffClass = "diff-negative";
         } else if (row.status === "surplus") {
             statusBadge = `<span class="badge-status-fulfilled">Surplus ✓</span>`;
             diffClass = "diff-positive";
         } else if (row.status === "fulfilled") {
-            statusBadge = `<span class="badge-status-fulfilled">Fulfilled ✓</span>`;
+            statusBadge = `<span class="badge-status-fulfilled">Met ✓</span>`;
             diffClass = "diff-neutral";
         } else if (row.status === "unscheduled") {
-            statusBadge = `<span class="badge-status-new">Shipped, no schedule</span>`;
+            statusBadge = `<span class="badge-status-new">Shipped, no commitment</span>`;
             diffClass = "diff-positive";
+        } else if (row.status === "no_commitment") {
+            statusBadge = `<span class="badge-status-same">No commitment</span>`;
+            diffClass = "diff-neutral";
         } else {
             statusBadge = `<span class="badge-status-same">Unchanged =</span>`;
             diffClass = "diff-neutral";
         }
 
         const diffDisplay = diff > 0 ? `+${formatNumber(diff)}` : formatNumber(diff);
-        const pctRaw = row.percentChange ?? row.fulfillmentRate;
-        const pctDisplay = pctRaw == null ? "-" : `${pctRaw.toFixed(1)}%`;
+        const pctDisplay = row.achievementRate == null ? "–" : `${row.achievementRate.toFixed(1)}%`;
         const chg = row.scheduleChange;
         const chgClass = chg > 0 ? "diff-positive" : chg < 0 ? "diff-negative" : "diff-neutral";
         const chgDisplay = chg == null ? "–" : chg > 0 ? `+${formatNumber(chg)}` : formatNumber(chg);
@@ -936,26 +914,34 @@ function renderComparisonTable() {
     <td class="cell-trunc" title="${escapeHTML(row.customer)}"><strong>${escapeHTML(row.customer)}</strong></td>
     <td><span class="part-chip">${escapeHTML(row.partNo)}</span></td>
     <td>${escapeHTML(row.line || "-")}</td>
-    <td class="num">${formatNumber(valA)}</td>
-    <td class="num">${formatNumber(valB)}</td>
+    <td class="num">${formatNumber(row.qtySchedule)}</td>
+    <td class="num">${formatNumber(row.qtyCommitment)}</td>
+    <td class="num">${formatNumber(row.qtyDispatch)}</td>
     <td class="num ${diffClass}">${diffDisplay}</td>
     <td class="num ${diffClass}">${pctDisplay}</td>
     <td class="num ${chgClass}" ${chgTitle}>${chgDisplay}</td>
     <td>${statusBadge}</td>
 </tr>`;
     }).join("");
-const foot = document.getElementById("comparisonTableFoot");
-if (foot) {
-    const tA = filtered.reduce((s, r) => s + (r.baseQty ?? r.qtyA ?? 0), 0);
-    const tB = filtered.reduce((s, r) => s + (r.compareQty ?? r.qtyB ?? 0), 0);
-    const tD = tB - tA;
-    const tC = filtered.reduce((s, r) => s + (r.scheduleChange ?? 0), 0);
-    const anyChange = filtered.some(r => r.scheduleChange != null);
-    foot.innerHTML = `<tr class="total-row"><td colspan="3">Total (${filtered.length} parts)</td>
-        <td class="num">${formatNumber(tA)}</td><td class="num">${formatNumber(tB)}</td>
-        <td class="num">${tD > 0 ? "+" : ""}${formatNumber(tD)}</td><td></td>
-        <td class="num">${anyChange ? (tC > 0 ? "+" : "") + formatNumber(tC) : ""}</td><td></td></tr>`;
-}
+
+    const foot = document.getElementById("comparisonTableFoot");
+    if (foot) {
+        const tSched = filtered.reduce((s, r) => s + (r.qtySchedule ?? 0), 0);
+        const tCommit = filtered.reduce((s, r) => s + (r.qtyCommitment ?? 0), 0);
+        const tDisp = filtered.reduce((s, r) => s + (r.qtyDispatch ?? 0), 0);
+        const tDiff = tDisp - tCommit;
+        const tAch = tCommit > 0 ? `${((tDisp / tCommit) * 100).toFixed(1)}%` : "–";
+        const tC = filtered.reduce((s, r) => s + (r.scheduleChange ?? 0), 0);
+        const anyChange = filtered.some(r => r.scheduleChange != null);
+        foot.innerHTML = `<tr class="total-row"><td colspan="3">Total (${filtered.length} parts)</td>
+            <td class="num">${formatNumber(tSched)}</td>
+            <td class="num">${formatNumber(tCommit)}</td>
+            <td class="num">${formatNumber(tDisp)}</td>
+            <td class="num">${tDiff > 0 ? "+" : ""}${formatNumber(tDiff)}</td>
+            <td class="num">${tAch}</td>
+            <td class="num">${anyChange ? (tC > 0 ? "+" : "") + formatNumber(tC) : ""}</td>
+            <td></td></tr>`;
+    }
 }
 
 function exportComparisonToCSV() {
@@ -963,13 +949,16 @@ function exportComparisonToCSV() {
         showToast("No comparison data available to export.", "error");
         return;
     }
-    const headers = ["Customer", "Part No", "Line", "Customer Request",
-        compareTarget === "dispatch" ? "IFB Dispatch" : "IFB Commitment",
-        "Difference", "Fill %", "Schedule Change", "Status"];
+    const headers = [
+        "Customer", "Part No", "Line", "Customer Schedule",
+        "IFB Commitment", "IFB Dispatch", "Difference",
+        "Achievement %", "Schedule Change", "Status"
+    ];
     const rows = currentComparisonRows.map(r => [
         csvCell(r.customer), csvCell(r.partNo), csvCell(r.line),
-        r.qtyA ?? 0, r.qtyB ?? 0, r.diff ?? 0,
-        r.fulfillmentRate == null ? "" : r.fulfillmentRate.toFixed(2),
+        r.qtySchedule ?? 0, r.qtyCommitment ?? 0, r.qtyDispatch ?? 0,
+        r.diff ?? 0,
+        r.achievementRate == null ? "" : r.achievementRate.toFixed(2),
         r.scheduleChange ?? "", csvCell(r.status)
     ]);
 
