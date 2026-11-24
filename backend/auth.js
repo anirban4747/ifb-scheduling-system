@@ -2,7 +2,10 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-const usersPath = path.join(__dirname, "../database/users.json");
+const authDataDir = process.env.DATA_DIR
+    ? path.resolve(process.env.DATA_DIR)
+    : path.join(__dirname, "../database");
+const usersPath = path.join(authDataDir, "users.json");
 const TOKEN_SECRET = process.env.AUTH_SECRET || "ifb-scheduling-portal-dev-secret-change-me";
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 

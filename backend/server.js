@@ -20,9 +20,18 @@ const {
 
 const app = express();
 const PORT = Number(process.env.PORT || 3001);
-const uploadDir = path.join(__dirname, "../upload");
-const scheduleDataPath = path.join(__dirname, "../database/schedule-records.json");
-const scheduleSnapshotsPath = path.join(__dirname, "../database/schedule-snapshots.json");
+const dataDir = process.env.DATA_DIR
+    ? path.resolve(process.env.DATA_DIR)
+    : path.join(__dirname, "../database");
+const uploadDir = process.env.UPLOAD_DIR
+    ? path.resolve(process.env.UPLOAD_DIR)
+    : path.join(__dirname, "../upload");
+const scheduleDataPath = path.join(dataDir, "schedule-records.json");
+const scheduleSnapshotsPath = path.join(dataDir, "schedule-snapshots.json");
+
+if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+}
 
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
