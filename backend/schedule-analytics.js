@@ -487,7 +487,9 @@ function compareWithinSameSheet(snapshots, options = {}) {
     const {
         snapshotId,
         part = "",
+        partQuery = "",
         range = 6,
+        trendYear = "",
         mode = "months",
         monthA,
         monthB,
@@ -512,11 +514,20 @@ function compareWithinSameSheet(snapshots, options = {}) {
     }
 
     const partFilter = String(part || "").trim().toLowerCase();
-    const matchedRows = (targetSnap.rows || []).filter(r =>
-        matchesCustomer(r, customer) &&
-        (!partFilter
-            || String(r.partNo || "").trim().toLowerCase() === partFilter
-            || String(r.customerPartNo || "").trim().toLowerCase() === partFilter));
+    const queryTokens = String(partQuery || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const matchedRows = (targetSnap.rows || []).filter(r => {
+        if (!matchesCustomer(r, customer)) return false;
+        if (partFilter
+            && String(r.partNo || "").trim().toLowerCase() !== partFilter
+            && String(r.customerPartNo || "").trim().toLowerCase() !== partFilter) {
+            return false;
+        }
+        if (queryTokens.length) {
+            const haystack = `${r.partNo || ""} ${r.customerPartNo || ""} ${r.line || ""} ${r.productDescription || ""}`.toLowerCase();
+            if (!queryTokens.every(token => haystack.includes(token))) return false;
+        }
+        return true;
+    });
 
     if (mode === "months") {
         const allMonthsInSheet = new Set();
@@ -677,25 +688,41 @@ function compareWithinSameSheet(snapshots, options = {}) {
         }
         const sortedMonths = Array.from(allMonths).sort();
 
-        const rangeMonths = Number(range) === 12 ? 12 : 6;
+        const availableYears = Array.from(new Set(sortedMonths.map(m => m.slice(0, 4)))).sort();
+        const rangeKey = String(range || "6").toLowerCase();
         const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : "";
-        let windowMonths = [];
+        const fallbackAnchor = validMonth || sortedMonths[sortedMonths.length - 1] || `${new Date().getFullYear()}-01`;
+        const activeYear = /^\d{4}$/.test(String(trendYear || ""))
+            ? String(trendYear)
+            : fallbackAnchor.slice(0, 4);
 
-        if (rangeMonths === 12) {
-            const anchor = validMonth || sortedMonths[sortedMonths.length - 1] || `${new Date().getFullYear()}-01`;
-            const year = anchor.slice(0, 4);
-            windowMonths = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
+        let windowMonths = [];
+        if (rangeKey === "all") {
+            if (sortedMonths.length) {
+                const start = sortedMonths[0];
+                const end = sortedMonths[sortedMonths.length - 1];
+                const [sy, sm] = start.split("-").map(Number);
+                const [ey, em] = end.split("-").map(Number);
+                const span = (ey - sy) * 12 + (em - sm) + 1;
+                windowMonths = span > 0 && span <= 48
+                    ? Array.from({ length: span }, (_, i) => shiftMonthKey(start, i))
+                    : sortedMonths;
+            } else if (validMonth) {
+                windowMonths = [validMonth];
+            }
+        } else if (rangeKey === "12") {
+            windowMonths = Array.from({ length: 12 }, (_, i) => `${activeYear}-${String(i + 1).padStart(2, "0")}`);
         } else {
             let windowEnd = sortedMonths.length ? sortedMonths[sortedMonths.length - 1] : validMonth;
             if (validMonth && (!windowEnd || validMonth > windowEnd)) windowEnd = validMonth;
-            let windowStart = windowEnd ? shiftMonthKey(windowEnd, -(rangeMonths - 1)) : "";
+            let windowStart = windowEnd ? shiftMonthKey(windowEnd, -5) : "";
             if (validMonth && validMonth < windowStart) {
-            windowStart = validMonth;
-            windowEnd = shiftMonthKey(validMonth, rangeMonths - 1);
+                windowStart = validMonth;
+                windowEnd = shiftMonthKey(validMonth, 5);
             }
             windowMonths = windowEnd
-            ? Array.from({ length: rangeMonths }, (_, i) => shiftMonthKey(windowStart, i))
-            : [];
+                ? Array.from({ length: 6 }, (_, i) => shiftMonthKey(windowStart, i))
+                : [];
         }
 
         const monthlyTrend = windowMonths.map(m => {
@@ -929,6 +956,8 @@ function compareWithinSameSheet(snapshots, options = {}) {
             month,
             monthLabel,
             monthlyTrend,
+            availableYears,
+            trendYear: activeYear,
             byLine,
             byCustomer,
             demandAround,
@@ -1000,7 +1029,15 @@ function getSnapshotComparisonMeta(snapshots, snapshotId) {
             if (r.partNo && !parts.has(r.partNo)) parts.set(r.partNo, r.productDescription || "");
             if (cust && r.partNo) {
                 const pairKey = `${cust}||${r.partNo}`;
-                if (!pairs.has(pairKey)) pairs.set(pairKey, { customer: cust, partNo: r.partNo, description: r.productDescription || "" });
+                if (!pairs.has(pairKey)) {
+                    pairs.set(pairKey, {
+                        customer: cust,
+                        partNo: r.partNo,
+                        customerPartNo: r.customerPartNo || "",
+                        line: String(r.line || "").trim(),
+                        description: String(r.productDescription || "").trim()
+                    });
+                }
             }
         });
     }

@@ -239,12 +239,24 @@ function getPreviousMonthLabel() {
 }
 
 function getMonthlyScheduleQuantity(row, monthKey = getSelectedMonthKey(), fallbackValue = 0) {
-    if (row.monthlySchedules && Object.prototype.hasOwnProperty.call(row.monthlySchedules, monthKey)) {
-        return Number(row.monthlySchedules[monthKey]) || 0;
+    const schedules = row.monthlySchedules;
+    if (schedules && Object.keys(schedules).length > 0) {
+        return Object.prototype.hasOwnProperty.call(schedules, monthKey)
+            ? Number(schedules[monthKey]) || 0
+            : 0;
     }
     return Number(fallbackValue) || 0;
 }
 
+function getMonthlyDispatchQuantity(row, monthKey) {
+    const dispatches = row.monthlyDispatches;
+    if (dispatches && Object.keys(dispatches).length > 0) {
+        return Object.prototype.hasOwnProperty.call(dispatches, monthKey)
+            ? Number(dispatches[monthKey]) || 0
+            : 0;
+    }
+    return Number(row.actualDispatch) || 0;
+}
 
 function displayScheduleMonth(value) {
     const text = String(value || "").trim();
@@ -296,25 +308,6 @@ function updateDashboardMonthLabels() {
     const selectedMonth = monthInput.value;
     if (!/^\d{4}-\d{2}$/.test(selectedMonth)) return;
 
-    const month1Key = selectedMonth;
-    const month2Key = shiftYearMonth(selectedMonth, 1);
-    const month3Key = shiftYearMonth(selectedMonth, 2);
-
-    const month1Label = formatMonthLabel(month1Key);
-    const month2Label = formatMonthLabel(month2Key);
-    const month3Label = formatMonthLabel(month3Key);
-
-    const planTitle = `Monthly Plan: ${month1Label} (FIRM) and (TENTATIVE 2 months)`;
-    const recBanner = document.getElementById("recordsPlanBanner");
-    if (recBanner) recBanner.textContent = planTitle;
-
-
-    const recM1 = document.getElementById("recordsMonth1Label");
-    const recM2 = document.getElementById("recordsMonth2Label");
-    const recM3 = document.getElementById("recordsMonth3Label");
-    if (recM1) recM1.textContent = month1Label;
-    if (recM2) recM2.textContent = month2Label;
-    if (recM3) recM3.textContent = month3Label;
 
     const labels = {
         previous: formatLongMonthLabel(shiftYearMonth(selectedMonth, -1)),
@@ -344,57 +337,333 @@ function updateDashboardMonthLabels() {
 let currentComparisonRows = [];
 let currentComparisonFilter = "all";
 
-let analysisPairs = [];   // [{ customer, partNo, description }] for the selected sheet
+let analysisPairs = [];   // [{ customer, partNo, customerPartNo, line, description }]
+let analysisScope = { customer: "ALL", part: "", partQuery: "", label: "" };
+let scopeDropdownItems = [];
 
-function onScopeFilterChange() {
-    refreshCascadingFilters();
+function getAnalysisScopeLabel() {
+    if (analysisScope.label) return analysisScope.label;
+    if (analysisScope.customer === "ALL" && !analysisScope.part && !analysisScope.partQuery) {
+        return "All customers · All parts";
+    }
+    const custPart = analysisScope.customer === "ALL" ? "All companies" : analysisScope.customer;
+    const itemPart = analysisScope.part
+        ? `Part ${analysisScope.part}`
+        : analysisScope.partQuery
+            ? `"${analysisScope.partQuery}"`
+            : "All parts";
+    return `${custPart} · ${itemPart}`;
+}
+
+function updateScopeInputDisplay() {
+    const input = document.getElementById("analysisScopeInput");
+    const clearBtn = document.getElementById("analysisScopeClear");
+    const isFiltered = analysisScope.customer !== "ALL" || !!analysisScope.part || !!analysisScope.partQuery;
+    if (input) input.value = isFiltered ? analysisScope.label : "";
+    if (clearBtn) clearBtn.style.display = isFiltered ? "inline-flex" : "none";
+}
+
+function syncAnalysisScopeWithPairs() {
+    const custSet = new Set(analysisPairs.map(p => p.customer));
+    const partSet = new Set(analysisPairs.map(p => p.partNo));
+    if (analysisScope.customer !== "ALL" && !custSet.has(analysisScope.customer)) {
+        analysisScope = { customer: "ALL", part: "", partQuery: "", label: "" };
+    } else if (analysisScope.part && !partSet.has(analysisScope.part)) {
+        analysisScope.part = "";
+        analysisScope.label = analysisScope.customer === "ALL" ? "" : `${analysisScope.customer} — All parts`;
+    }
+    updateScopeInputDisplay();
+}
+
+function applyAnalysisScope(nextScope) {
+    analysisScope = {
+        customer: nextScope.customer || "ALL",
+        part: nextScope.part || "",
+        partQuery: nextScope.partQuery || "",
+        label: nextScope.label || ""
+    };
+    updateScopeInputDisplay();
+    closeScopeDropdown();
     runStreamlinedAnalysis();
 }
 
-function refreshCascadingFilters() {
-    const custSel = document.getElementById("sameCustomerSelect");
-    const partSel = document.getElementById("samePartSelect");
-    if (!custSel || !partSel) return;
-
-    const selCust = custSel.value || "ALL";
-    const selPart = partSel.value || "";
-
-    // parts this customer orders
-    const partMap = new Map();
-    analysisPairs.forEach(p => {
-        if ((selCust === "ALL" || p.customer === selCust) && !partMap.has(p.partNo)) {
-            partMap.set(p.partNo, p.description);
-        }
-    });
-    // customers who order this part
-    const custSet = new Set();
-    analysisPairs.forEach(p => {
-        if (!selPart || p.partNo === selPart) custSet.add(p.customer);
-    });
-
-    const parts = [...partMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-    const customers = [...custSet].sort((a, b) => a.localeCompare(b));
-
-    partSel.innerHTML = `<option value="">All parts (${parts.length})</option>` + parts.map(([no, desc]) => {
-        const label = desc && desc !== "-" ? `${no} — ${desc.length > 32 ? desc.slice(0, 32) + "…" : desc}` : no;
-        return `<option value="${escapeHTML(no)}">${escapeHTML(label)}</option>`;
-    }).join("");
-    partSel.value = partMap.has(selPart) ? selPart : "";
-
-    custSel.innerHTML = `<option value="ALL">All customers (${customers.length})</option>` +
-        customers.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join("");
-    custSel.value = custSet.has(selCust) ? selCust : "ALL";
+function clearAnalysisScope() {
+    applyAnalysisScope({ customer: "ALL", part: "", partQuery: "", label: "" });
 }
+
+function closeScopeDropdown() {
+    const dd = document.getElementById("analysisScopeDropdown");
+    if (dd) dd.style.display = "none";
+    updateScopeInputDisplay();
+}
+
+function buildScopeOptions(rawQuery) {
+    const q = (rawQuery || "").trim();
+    const qLower = q.toLowerCase();
+    const tokens = qLower.split(/\s+/).filter(Boolean);
+    const groups = [];
+
+    const addGroup = (heading, items) => {
+        if (items.length) groups.push({ heading, items });
+    };
+
+    const isSameScope = item =>
+        item.customer === analysisScope.customer &&
+        item.part === analysisScope.part &&
+        item.partQuery.toLowerCase() === analysisScope.partQuery.toLowerCase();
+
+    const pairMatchesTokens = p => {
+        const hay = `${p.partNo} ${p.customerPartNo || ""} ${p.line || ""} ${p.description || ""}`.toLowerCase();
+        return tokens.every(t => hay.includes(t));
+    };
+
+    // Case 1: Empty input or reopened on an existing selection -> show context-aware drilldown
+    if (!q) {
+        const quick = [{
+            customer: "ALL", part: "", partQuery: "", label: "",
+            title: "All Customers & All Parts",
+            meta: `${analysisPairs.length} parts`
+        }];
+
+        if (analysisScope.partQuery) {
+            const pq = analysisScope.partQuery;
+            const pqTokens = pq.toLowerCase().split(/\s+/).filter(Boolean);
+            const matched = analysisPairs.filter(p => {
+                const hay = `${p.partNo} ${p.customerPartNo || ""} ${p.line || ""} ${p.description || ""}`.toLowerCase();
+                return pqTokens.every(t => hay.includes(t));
+            });
+            const byCust = new Map();
+            matched.forEach(p => byCust.set(p.customer, (byCust.get(p.customer) || 0) + 1));
+
+            quick.push({
+                customer: "ALL", part: "", partQuery: pq, label: `All companies · ${pq}`,
+                title: `All companies · ${pq}`,
+                meta: `${byCust.size} companies · ${matched.length} parts`
+            });
+            addGroup("Quick Scope", quick);
+            addGroup(`Companies with "${pq}"`, [...byCust.entries()]
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([c, n]) => ({
+                    customer: c, part: "", partQuery: pq, label: `${c} · ${pq}`,
+                    title: `${c} · ${pq}`, meta: `${n} parts`
+                })));
+            addGroup(`Parts matching "${pq}"`, matched.slice(0, 35).map(p => ({
+                customer: p.customer, part: p.partNo, partQuery: "",
+                label: `${p.partNo} (${p.customer})`,
+                title: `${p.partNo}${p.line ? ` · ${p.line}` : ""}`,
+                meta: p.customer
+            })));
+            return groups;
+        }
+
+        if (analysisScope.customer !== "ALL") {
+            const c = analysisScope.customer;
+            const cPairs = analysisPairs.filter(p => p.customer === c);
+            const byLine = new Map();
+            cPairs.forEach(p => {
+                if (p.line) byLine.set(p.line, (byLine.get(p.line) || 0) + 1);
+            });
+            quick.push({
+                customer: c, part: "", partQuery: "", label: `${c} — All parts`,
+                title: `${c} — All parts`, meta: `${cPairs.length} parts`
+            });
+            addGroup("Current Customer", quick);
+            addGroup(`Lines for ${c}`, [...byLine.entries()]
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([line, n]) => ({
+                    customer: c, part: "", partQuery: line, label: `${c} · ${line}`,
+                    title: `${c} · ${line}`, meta: `${n} parts`
+                })));
+            addGroup(`Parts ordered by ${c}`, cPairs
+                .sort((a, b) => a.partNo.localeCompare(b.partNo))
+                .map(p => ({
+                    customer: c, part: p.partNo, partQuery: "",
+                    label: `${p.partNo} (${c})`,
+                    title: `${p.partNo}${p.line ? ` · ${p.line}` : ""}${p.description && p.description !== "-" ? ` — ${p.description.slice(0, 32)}` : ""}`,
+                    meta: "Part"
+                })));
+            return groups;
+        }
+
+        // Default browse (nothing filtered yet)
+        addGroup("Reset / All", quick);
+        const byLine = new Map();
+        const byCust = new Map();
+        analysisPairs.forEach(p => {
+            byCust.set(p.customer, (byCust.get(p.customer) || 0) + 1);
+            if (p.line && !/^\d+$/.test(p.line)) {
+                if (!byLine.has(p.line)) byLine.set(p.line, { parts: 0, custs: new Set() });
+                const entry = byLine.get(p.line);
+                entry.parts += 1;
+                entry.custs.add(p.customer);
+            }
+        });
+        addGroup("Product Lines (All Companies)", [...byLine.entries()]
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([line, info]) => ({
+                customer: "ALL", part: "", partQuery: line, label: `All companies · ${line}`,
+                title: `All companies · ${line}`,
+                meta: `${info.custs.size} companies · ${info.parts} parts`
+            })));
+        addGroup("Customers (All Parts)", [...byCust.entries()]
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([c, n]) => ({
+                customer: c, part: "", partQuery: "", label: `${c} — All parts`,
+                title: `${c} — All parts`, meta: `${n} parts`
+            })));
+        return groups;
+    }
+
+    // Case 2: Live search based on typed text
+    const custCounts = new Map();
+    analysisPairs.forEach(p => custCounts.set(p.customer, (custCounts.get(p.customer) || 0) + 1));
+
+    // 1. Customers matching typed text
+    const matchedCustomers = [...custCounts.keys()]
+        .filter(c => tokens.every(t => c.toLowerCase().includes(t)))
+        .sort((a, b) => a.localeCompare(b));
+
+    addGroup("Customers (All Parts)", matchedCustomers.map(c => ({
+        customer: c, part: "", partQuery: "", label: `${c} — All parts`,
+        title: `${c} — All parts`, meta: `${custCounts.get(c)} parts`
+    })));
+
+    // 2. Parts / Lines / Descriptions matching typed text (with All Companies + per-company options)
+    const matchedParts = analysisPairs.filter(pairMatchesTokens);
+    if (matchedParts.length) {
+        const distinctLines = [...new Set(matchedParts.map(p => p.line).filter(Boolean))];
+        const termDisplay = distinctLines.length === 1 ? distinctLines[0] : q;
+        const termQuery = distinctLines.length === 1 ? distinctLines[0] : q;
+
+        const custMap = new Map();
+        matchedParts.forEach(p => custMap.set(p.customer, (custMap.get(p.customer) || 0) + 1));
+
+        const termItems = [{
+            customer: "ALL", part: "", partQuery: termQuery,
+            label: `All companies · ${termDisplay}`,
+            title: `All companies · ${termDisplay}`,
+            meta: `${custMap.size} companies · ${matchedParts.length} parts`
+        }];
+        [...custMap.entries()]
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .forEach(([c, n]) => {
+                termItems.push({
+                    customer: c, part: "", partQuery: termQuery,
+                    label: `${c} · ${termDisplay}`,
+                    title: `${c} · ${termDisplay}`,
+                    meta: `${n} parts`
+                });
+            });
+        addGroup(`Matching "${termDisplay}" by Company`, termItems);
+    }
+
+    // 3. Specific Parts (either matching the term OR ordered by matching customers)
+    const partItemsMap = new Map();
+    const pushPair = p => {
+        const key = `${p.customer}||${p.partNo}`;
+        if (!partItemsMap.has(key)) {
+            partItemsMap.set(key, {
+                customer: p.customer, part: p.partNo, partQuery: "",
+                label: `${p.partNo} (${p.customer})`,
+                title: `${p.partNo}${p.line ? ` · ${p.line}` : ""}${p.description && p.description !== "-" ? ` — ${p.description.slice(0, 30)}` : ""}`,
+                meta: p.customer
+            });
+        }
+    };
+    matchedParts.forEach(pushPair);
+    if (matchedCustomers.length) {
+        const custSet = new Set(matchedCustomers);
+        analysisPairs.filter(p => custSet.has(p.customer)).forEach(pushPair);
+    }
+    addGroup("Specific Parts", [...partItemsMap.values()].slice(0, 40));
+
+    groups.forEach(g => g.items.forEach(item => { item.active = isSameScope(item); }));
+    return groups;
+}
+
+function renderScopeDropdown(query) {
+    const dd = document.getElementById("analysisScopeDropdown");
+    if (!dd) return;
+    const groups = buildScopeOptions(query);
+    scopeDropdownItems = [];
+
+    if (!groups.length) {
+        dd.innerHTML = `<div class="scope-empty">No matching customers, lines, or parts.</div>`;
+        dd.style.display = "block";
+        return;
+    }
+
+    let html = "";
+    groups.forEach(g => {
+        html += `<div class="scope-group-label">${escapeHTML(g.heading)}</div>`;
+        g.items.forEach(item => {
+            const idx = scopeDropdownItems.length;
+            scopeDropdownItems.push(item);
+            html += `<button type="button" class="scope-option${item.active ? " is-active" : ""}" onmousedown="event.preventDefault(); selectScopeOption(${idx})">
+                <span class="scope-opt-title">${escapeHTML(item.title)}</span>
+                <span class="scope-opt-meta">${escapeHTML(item.meta)}</span>
+            </button>`;
+        });
+    });
+
+    dd.innerHTML = html;
+    dd.style.display = "block";
+}
+
+function selectScopeOption(idx) {
+    const item = scopeDropdownItems[idx];
+    if (item) applyAnalysisScope(item);
+}
+
+function openScopeDropdown() {
+    const input = document.getElementById("analysisScopeInput");
+    if (input && analysisScope.label && input.value === analysisScope.label) {
+        input.select();
+        renderScopeDropdown("");
+    } else {
+        renderScopeDropdown(input?.value || "");
+    }
+}
+
+function onScopeInput() {
+    const input = document.getElementById("analysisScopeInput");
+    const clearBtn = document.getElementById("analysisScopeClear");
+    const val = input?.value || "";
+    if (clearBtn) clearBtn.style.display = val || analysisScope.label ? "inline-flex" : "none";
+    renderScopeDropdown(val);
+}
+
+function onScopeKeydown(event) {
+    if (event.key === "Escape") {
+        closeScopeDropdown();
+        document.getElementById("analysisScopeInput")?.blur();
+    } else if (event.key === "Enter") {
+        event.preventDefault();
+        const val = (document.getElementById("analysisScopeInput")?.value || "").trim();
+        if (!val) {
+            clearAnalysisScope();
+        } else if (scopeDropdownItems.length) {
+            selectScopeOption(0);
+        }
+    }
+}
+
+document.addEventListener("click", event => {
+    const combo = document.getElementById("analysisScopeCombo");
+    if (combo && !combo.contains(event.target)) {
+        const dd = document.getElementById("analysisScopeDropdown");
+        if (dd && dd.style.display !== "none") closeScopeDropdown();
+    }
+});
 
 
 async function onSameSheetChange() {
     const sel = document.getElementById("sameSheetSelect");
     if (!sel || !sel.value) return;
+    cmpTrendYear = "";
     await loadComparisonMeta(sel.value);
     runStreamlinedAnalysis();
 }
-
-
 
 async function initAnalysisTab() {
     await loadComparisonMeta();
@@ -461,7 +730,7 @@ async function loadComparisonMeta(selectedSnapshotId) {
         );
 
         analysisPairs = meta.availablePairs || [];
-        refreshCascadingFilters();
+        syncAnalysisScopeWithPairs();
 
         return meta;
     } catch (err) {
@@ -473,13 +742,38 @@ async function runStreamlinedAnalysis() {
     await runSameSheetStreamlined();
 }
 let cmpData = null;
-let cmpRange = 6;
-function setCmpRange(n) {
-    cmpRange = n === 12 ? 12 : 6;
+let cmpRange = "6";
+let cmpTrendYear = "";
+let lastAnalysisMonth = "";
+
+function setCmpRange(rangeValue) {
+    cmpRange = String(rangeValue || "6");
+    if (cmpRange !== "12") cmpTrendYear = "";
     document.querySelectorAll("#cmpRangeToggle button").forEach(b =>
-        b.classList.toggle("active", Number(b.dataset.range) === cmpRange));
+        b.classList.toggle("active", b.dataset.range === cmpRange));
     runStreamlinedAnalysis();
 }
+
+function onCmpYearChange() {
+    const sel = document.getElementById("cmpYearSelect");
+    cmpTrendYear = sel ? sel.value : "";
+    runStreamlinedAnalysis();
+}
+
+function syncCmpYearDropdown(data) {
+    const sel = document.getElementById("cmpYearSelect");
+    if (!sel) return;
+    const years = data?.availableYears || [];
+    if (cmpRange !== "12" || !years.length) {
+        sel.style.display = "none";
+        return;
+    }
+    sel.innerHTML = years.map(y => `<option value="${escapeHTML(y)}">${escapeHTML(y)}</option>`).join("");
+    const active = data?.trendYear || years[years.length - 1];
+    sel.value = years.includes(active) ? active : years[years.length - 1];
+    sel.style.display = "inline-block";
+}
+
 let cmpLineSort = { key: "grossShortfall", dir: "desc" };
 
 function cmpTarget() {
@@ -527,15 +821,15 @@ function renderTrendChart() {
     const trend = cmpData?.monthlyTrend || [];
     if (!trend.length) { panel.style.display = "none"; return; }
     panel.style.display = "block";
-        const custSel = document.getElementById("sameCustomerSelect")?.value || "ALL";
-    const partTxt = (document.getElementById("samePartSelect")?.value || "").trim();
     const scopeEl = document.getElementById("cmpTrendScope");
     if (scopeEl) {
-        scopeEl.textContent = `${custSel === "ALL" ? "All customers" : custSel} · ${partTxt ? `Part: ${partTxt}` : "All parts"} · ${trend[0].label} to ${trend[trend.length - 1].label}. Click a month to select it; the chip is dispatched ÷ commitment.`;
+        scopeEl.textContent = `${getAnalysisScopeLabel()} · ${trend[0].label} to ${trend[trend.length - 1].label}. Click a month to select it; the chip is dispatched ÷ commitment.`;
     }
 
     const target = cmpTarget();
-    const W = 760, H = 250, pl = 44, pr = 12, pt = 12, pb = 66;
+    const H = 250, pl = 44, pr = 12, pt = 12, pb = 66;
+    const isWide = trend.length > 12;
+    const W = isWide ? pl + pr + trend.length * 64 : 760;
     const pw = W - pl - pr, ph = H - pt - pb;
     const maxY = niceCeil(Math.max(1, ...trend.flatMap(m => [m.actualCustomerSchedule, m.commitment, m.dispatched])));
     const y = v => pt + ph - (v / maxY) * ph;
@@ -585,12 +879,22 @@ function renderTrendChart() {
             <span><i class="lg bar-commit"></i>IFB commitment</span>
             <span><i class="lg bar-disp"></i>Dispatched</span>
         </div>
-        <svg class="cmp-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly customer demand, IFB commitment and dispatch">
-            ${grid}${groups}
-        </svg>
+        <div class="cmp-chart-scroll">
+            <svg class="cmp-chart" viewBox="0 0 ${W} ${H}" style="${isWide ? `width:${W}px;max-width:none;` : ""}" role="img" aria-label="Monthly customer demand, IFB commitment and dispatch">
+                ${grid}${groups}
+            </svg>
+        </div>
         ${summary}`;
     box.querySelectorAll(".cmp-month:not(.is-empty)").forEach(g =>
         g.addEventListener("click", () => selectTrendMonth(g.dataset.month)));
+
+    if (isWide) {
+        const scrollWrap = box.querySelector(".cmp-chart-scroll");
+        const selIdx = trend.findIndex(m => m.month === cmpData.month);
+        if (scrollWrap && selIdx >= 0) {
+            scrollWrap.scrollLeft = Math.max(0, pl + slot * selIdx - scrollWrap.clientWidth / 2 + slot / 2);
+        }
+    }
 }
 
 function sortCmpLines(key) {
@@ -715,8 +1019,9 @@ async function runSameSheetStreamlined() {
     const runId = ++sameRunId;
     const snapshotId = document.getElementById("sameSheetSelect")?.value;
     const month = document.getElementById("sameMetricMonth")?.value || "ALL";
-    const customer = document.getElementById("sameCustomerSelect")?.value || "ALL";
-    const part = (document.getElementById("samePartSelect")?.value || "").trim();
+    const customer = analysisScope.customer || "ALL";
+    const part = analysisScope.part || "";
+    const partQuery = analysisScope.partQuery || "";
     const compareMonth = month !== "ALL" ? resolveCompareMonth(month) : "";
 
     const tbody = document.getElementById("comparisonTableBody");
@@ -727,8 +1032,20 @@ async function runSameSheetStreamlined() {
     }
 
     try {
-        const common = { snapshotId, customer, part };
-        const metricsQuery = new URLSearchParams({ ...common, mode: "metrics", metricA: "commitment", metricB: "dispatch", month, range: String(cmpRange) });
+        const common = { snapshotId, customer, part, partQuery };
+        if (month !== lastAnalysisMonth) {
+            cmpTrendYear = "";
+            lastAnalysisMonth = month;
+        }
+        const metricsQuery = new URLSearchParams({
+            ...common,
+            mode: "metrics",
+            metricA: "commitment",
+            metricB: "dispatch",
+            month,
+            range: String(cmpRange),
+            ...(cmpRange === "12" && cmpTrendYear ? { trendYear: cmpTrendYear } : {})
+        });
         const requests = [fetch(apiUrl(`/analytics/compare-within-sheet?${metricsQuery}`))];
         if (compareMonth) {
             const changeQuery = new URLSearchParams({ ...common, mode: "months", monthA: compareMonth, monthB: month });
@@ -779,8 +1096,7 @@ async function runSameSheetStreamlined() {
         const thChange = document.getElementById("thColChange");
         if (thChange) thChange.textContent = hasChange ? `Schedule Δ vs ${change.labelA}` : "Schedule Δ";
 
-        const scope = customer === "ALL" ? "All Customers" : customer;
-            let subText = `${scope}${part ? ` · part ${part}` : ""} · ${data.sheet.source}`;
+        let subText = `${getAnalysisScopeLabel()} · ${data.sheet.source}`;
         if (hasChange) {
             const cs = change.summary;
             const sign = cs.netChange >= 0 ? "+" : "";
@@ -792,6 +1108,7 @@ async function runSameSheetStreamlined() {
         if (subEl) subEl.textContent = subText;
 
         cmpData = data;
+        syncCmpYearDropdown(data);
         renderTrendChart();
         renderLineTable();
         applyCompareTarget();
@@ -1241,13 +1558,82 @@ function renderDashTrend(trend, selectedMonth) {
 function filterMasterTable() {
     renderMasterRecordsTable();
 }
+
 function toggleRecordColumns() {
     const on = !!document.getElementById("showAllColumns")?.checked;
     document.querySelector(".master-records-table")?.classList.toggle("show-details", on);
     const info = document.getElementById("recordsInfoGroup");
     const ops = document.getElementById("recordsOpsGroup");
-    if (info) info.colSpan = on ? 8 : 4;   // the group headers must match the visible columns
-    if (ops) ops.colSpan = on ? 5 : 3;
+    if (info) info.colSpan = on ? 8 : 4;   // match visible columns in each header group
+    if (ops) ops.colSpan = on ? 4 : 3;
+}
+
+function getAvailableRecordMonths(rows = allScheduleRows) {
+    const months = new Set();
+    const parseKey = val => {
+        const text = String(val || "").trim();
+        if (/^\d{4}-\d{2}$/.test(text)) return text;
+        const m = text.match(/^([a-z]{3,9})[\s'/-]+(\d{2}|\d{4})$/i);
+        if (!m) return "";
+        const idx = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+            .indexOf(m[1].slice(0, 3).toLowerCase());
+        if (idx === -1) return "";
+        const yr = m[2].length === 2 ? Number(`20${m[2]}`) : Number(m[2]);
+        return `${yr}-${String(idx + 1).padStart(2, "0")}`;
+    };
+
+    rows.forEach(r => {
+        Object.keys(r.monthlySchedules || {}).forEach(m => { if (/^\d{4}-\d{2}$/.test(m)) months.add(m); });
+        Object.keys(r.monthlyCommitments || {}).forEach(m => { if (/^\d{4}-\d{2}$/.test(m)) months.add(m); });
+        Object.keys(r.monthlyDispatches || {}).forEach(m => { if (/^\d{4}-\d{2}$/.test(m)) months.add(m); });
+        const dm = parseKey(r.deliveryMonth);
+        if (dm) months.add(dm);
+    });
+    return [...months].sort();
+}
+
+function syncRecordsMonthFilter(forceLatest = false) {
+    const monthSelect = document.getElementById("recordsMonthFilter");
+    const months = getAvailableRecordMonths(allScheduleRows);
+    const latest = months.length ? months[months.length - 1] : getSelectedMonthKey();
+
+    if (!monthSelect) return latest;
+
+    const prev = forceLatest ? "" : monthSelect.value;
+    if (!months.length) {
+        monthSelect.innerHTML = `<option value="${escapeHTML(latest)}">${escapeHTML(formatMonthLabel(latest))}</option>`;
+        monthSelect.value = latest;
+        return latest;
+    }
+
+    monthSelect.innerHTML = months
+        .map(m => `<option value="${escapeHTML(m)}">${escapeHTML(formatMonthLabel(m))} (${escapeHTML(m)})</option>`)
+        .join("");
+    monthSelect.value = prev && months.includes(prev) ? prev : latest;
+    return monthSelect.value;
+}
+
+function updateRecordsMonthHeaders(month1Key) {
+    const month2Key = shiftYearMonth(month1Key, 1);
+    const month3Key = shiftYearMonth(month1Key, 2);
+
+    const month1Label = formatMonthLabel(month1Key);
+    const month2Label = formatMonthLabel(month2Key);
+    const month3Label = formatMonthLabel(month3Key);
+
+    const recBanner = document.getElementById("recordsPlanBanner");
+    if (recBanner) recBanner.textContent = `Monthly Plan: ${month1Label} (FIRM) and (TENTATIVE 2 months)`;
+
+    const recM1 = document.getElementById("recordsMonth1Label");
+    const recM2 = document.getElementById("recordsMonth2Label");
+    const recM3 = document.getElementById("recordsMonth3Label");
+    if (recM1) recM1.textContent = month1Label;
+    if (recM2) recM2.textContent = month2Label;
+    if (recM3) recM3.textContent = month3Label;
+}
+
+function onRecordsMonthChange() {
+    renderMasterRecordsTable();
 }
 
 function renderMasterRecordsTable() {
@@ -1255,58 +1641,56 @@ function renderMasterRecordsTable() {
     const countEl = document.getElementById("recordCounterText");
     const searchInput = document.getElementById("tableSearchInput");
     const filterSelect = document.getElementById("recordsCustomerFilter");
-    const versionSelect = document.getElementById("recordsVersionFilter");
-    const monthSelect = document.getElementById("recordsMonthFilter");
 
     if (!tbody) return;
 
-    const setFilterOptions = (select, label, values) => {
-        if (!select) return "ALL";
-        const selectedValue = select.value || "ALL";
-        const options = [...new Set(values.filter(Boolean).map(String))].sort((a, b) => a.localeCompare(b));
-        select.innerHTML = `<option value="ALL">${label}</option>` +
-            options.map(value => `<option value="${escapeHTML(value)}">${escapeHTML(label === "All months" ? displayDeliveryMonth(value) : value)}</option>`).join("");
-        select.value = options.includes(selectedValue) ? selectedValue : "ALL";
-        return select.value;
-    };
+    const month1Key = syncRecordsMonthFilter();
+    const month2Key = shiftYearMonth(month1Key, 1);
+    const month3Key = shiftYearMonth(month1Key, 2);
+    updateRecordsMonthHeaders(month1Key);
 
-    let rows = [...allScheduleRows];
+    let rows = allScheduleRows.filter(r => {
+        const hasMaps = (r.monthlySchedules && Object.keys(r.monthlySchedules).length > 0)
+            || (r.monthlyCommitments && Object.keys(r.monthlyCommitments).length > 0)
+            || (r.monthlyDispatches && Object.keys(r.monthlyDispatches).length > 0);
+        if (!hasMaps) return true;
+        return Object.prototype.hasOwnProperty.call(r.monthlySchedules || {}, month1Key)
+            || Object.prototype.hasOwnProperty.call(r.monthlyCommitments || {}, month1Key)
+            || Object.prototype.hasOwnProperty.call(r.monthlyDispatches || {}, month1Key);
+    });
+
+    const totalForMonth = rows.length;
     const searchTerm = (searchInput?.value || "").toLowerCase().trim();
     const custFilter = filterSelect?.value || "ALL";
-    const versionFilter = setFilterOptions(versionSelect, "All versions", rows.map(row => row.version));
-    const monthFilter = setFilterOptions(monthSelect, "All months", rows.map(row => row.deliveryMonth || "No month supplied"));
 
     if (custFilter !== "ALL") {
-        rows = rows.filter(r => r.customer === custFilter);
-    }
-    if (versionFilter !== "ALL") {
-        rows = rows.filter(r => (r.version || "Current") === versionFilter);
-    }
-    if (monthFilter !== "ALL") {
-        rows = rows.filter(r => (r.deliveryMonth || "No month supplied") === monthFilter);
+        rows = rows.filter(r => r.customer === custFilter || r.customerGroup === custFilter);
     }
 
     if (searchTerm) {
         rows = rows.filter(r => [
             r.serialNo, r.customer, r.customerGroup, r.customerCode,
             r.partNo, r.helper, r.customerPartNo, r.line,
-            r.productDescription, r.application, r.version, r.deliveryMonth, r.source, r.importedAt
+            r.productDescription, r.application, r.source, r.importedAt
         ].some(value => String(value || "").toLowerCase().includes(searchTerm)));
     }
 
-    if (countEl) countEl.textContent = `Showing ${rows.length} of ${allScheduleRows.length} records`;
+    if (countEl) countEl.textContent = `Showing ${rows.length} of ${totalForMonth} records`;
 
     if (!rows.length) {
-        tbody.innerHTML = `<tr><td colspan="16" style="text-align: center; padding: 24px; color: #94a3b8;">No schedule records match the current criteria.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="15" style="text-align: center; padding: 24px; color: #94a3b8;">No schedule records match the current criteria.</td></tr>`;
         return;
     }
 
-    const month1Key = getSelectedMonthKey();
-    const month2Key = shiftYearMonth(month1Key, 1);
-    const month3Key = shiftYearMonth(month1Key, 2);
-
-        tbody.innerHTML = rows.map((r, displayIndex) => {
+    tbody.innerHTML = rows.map((r, displayIndex) => {
         const originalIndex = allScheduleRows.indexOf(r);
+        const firmQty = getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0);
+        const tent1Qty = getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0);
+        const tent2Qty = getMonthlyScheduleQuantity(r, month3Key, 0);
+        const actualDispatch = getMonthlyDispatchQuantity(r, month1Key);
+        const hasMonthlyData = (r.monthlySchedules && Object.keys(r.monthlySchedules).length > 0)
+            || (r.monthlyDispatches && Object.keys(r.monthlyDispatches).length > 0);
+        const backlog = hasMonthlyData ? firmQty - actualDispatch : r.balance;
 
         return `
             <tr>
@@ -1318,13 +1702,12 @@ function renderMasterRecordsTable() {
                 <td class="col-detail">${escapeHTML(r.customerPartNo || "-")}</td>
                 <td>${escapeHTML(r.line || "-")}</td>
                 <td class="cell-trunc" title="${escapeHTML(r.productDescription || "")}">${escapeHTML(r.productDescription || "–")}</td>
-                <td class="num">${formatNumber(getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0))}</td>
-                <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0))}</td>
-                <td class="num tentative">${formatNumber(getMonthlyScheduleQuantity(r, month3Key, 0))}</td>
-                <td class="col-detail">${escapeHTML(r.version || "Current")}</td>
+                <td class="num">${formatNumber(firmQty)}</td>
+                <td class="num tentative">${formatNumber(tent1Qty)}</td>
+                <td class="num tentative">${formatNumber(tent2Qty)}</td>
                 <td class="col-detail">${escapeHTML(displayScheduleReceived(r))}</td>
-                <td class="num">${formatNumber(r.actualDispatch || 0)}</td>
-                <td class="num"><strong>${r.balance === null || r.balance === undefined ? "-" : formatNumber(r.balance)}</strong></td>
+                <td class="num">${formatNumber(actualDispatch)}</td>
+                <td class="num"><strong>${backlog === null || backlog === undefined ? "-" : formatNumber(backlog)}</strong></td>
                 <td>
                     <button class="btn-action-icon btn-delete-row" onclick="deleteScheduleRow(${originalIndex})" title="Delete entry">🗑️</button>
                 </td>
@@ -1350,13 +1733,14 @@ async function deleteScheduleRow(index) {
     showToast("Schedule row deleted", "info");
 }
 function csvCell(v) { return `"${String(v ?? "").replace(/"/g, '""')}"`; }
+
 function exportRecordsToCSV() {
     if (!allScheduleRows.length) {
         showToast("No records available to export", "error");
         return;
     }
 
-    const month1Key = getSelectedMonthKey();
+    const month1Key = syncRecordsMonthFilter();
     const month2Key = shiftYearMonth(month1Key, 1);
     const month3Key = shiftYearMonth(month1Key, 2);
 
@@ -1364,26 +1748,32 @@ function exportRecordsToCSV() {
         "Sl No", "Customer", "Customer code", "PART No.", "Helper",
         "Customer Part No", "Line", "Description",
         formatMonthLabel(month1Key), formatMonthLabel(month2Key), formatMonthLabel(month3Key),
-        "Version", "Schedule Received Date", "Actual Dispatch Qty", "Backlog", "Saved At", "Source"
+        "Schedule Received Date", "Actual Dispatch Qty", "Backlog", "Saved At", "Source"
     ];
     const csvRows = [headers.join(",")];
 
-        allScheduleRows.forEach((r, idx) => {
+    allScheduleRows.forEach((r, idx) => {
+        const firmQty = getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0);
+        const tent1Qty = getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0);
+        const tent2Qty = getMonthlyScheduleQuantity(r, month3Key, 0);
+        const actualDispatch = getMonthlyDispatchQuantity(r, month1Key);
+        const hasMonthlyData = (r.monthlySchedules && Object.keys(r.monthlySchedules).length > 0)
+            || (r.monthlyDispatches && Object.keys(r.monthlyDispatches).length > 0);
+        const backlog = hasMonthlyData ? firmQty - actualDispatch : r.balance;
+
         csvRows.push([
-    r.serialNo || idx + 1, r.customerGroup || r.customer, r.customerCode,
-    r.partNo, r.helper, r.customerPartNo, r.line, r.productDescription,
-    getMonthlyScheduleQuantity(r, month1Key, r.currentMonth || r.customerSchedule || 0),
-    getMonthlyScheduleQuantity(r, month2Key, r.comingMonth || 0),
-    getMonthlyScheduleQuantity(r, month3Key, 0),
-    r.version || "Current", r.scheduleReceivedDate, r.actualDispatch || 0,
-    r.balance, r.importedAt, r.source
-].map(csvCell).join(","));
+            r.serialNo || idx + 1, r.customerGroup || r.customer, r.customerCode,
+            r.partNo, r.helper, r.customerPartNo, r.line, r.productDescription,
+            firmQty, tent1Qty, tent2Qty,
+            r.scheduleReceivedDate, actualDispatch,
+            backlog, r.importedAt, r.source
+        ].map(csvCell).join(","));
     });
 
     const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `IFB_Schedule_Export_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `IFB_Schedule_Export_${month1Key}.csv`;
     link.click();
     showToast("Master schedule exported to CSV", "success");
 }
@@ -1572,10 +1962,10 @@ async function uploadExcel() {
             dashSnapshotId = "";
             await loadMasterData();
             activeCustomer = "ALL";
+            pickDefaultMonth(allScheduleRows);
+            syncRecordsMonthFilter(true);
             renderDashboardForCustomer(activeCustomer);
             renderMasterRecordsTable();
-            loadImportedFilesList();
-            loadComparisonMeta();
 
             if (status) {
                 status.style.color = "#059669";

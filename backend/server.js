@@ -868,12 +868,14 @@ app.get("/dashboard", (req, res) => {
 
 
 app.get("/analytics/compare-within-sheet", (req, res) => {
-    const { snapshotId, mode, monthA, monthB, metricA, metricB, month, customer, part, range } = req.query;
+    const { snapshotId, mode, monthA, monthB, metricA, metricB, month, customer, part, partQuery, range, trendYear } = req.query;
     const result = compareWithinSameSheet(scheduleSnapshots, {
         snapshotId: snapshotId ? String(snapshotId) : undefined,
         part: part ? String(part) : "",
+        partQuery: partQuery ? String(partQuery) : "",
         mode: mode ? String(mode) : "months",
         range: range ? String(range) : "6",
+        trendYear: trendYear ? String(trendYear) : "",
         monthA: monthA ? String(monthA) : undefined,
         monthB: monthB ? String(monthB) : undefined,
         metricA: metricA ? String(metricA) : "commitment",

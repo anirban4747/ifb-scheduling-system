@@ -210,7 +210,7 @@
                 <div class="table-toolbar">
                     <div class="search-input-wrap">
                         <span class="search-icon">🔍</span>
-                        <input type="text" id="tableSearchInput" placeholder="Search customer, part, version, month, or source..." oninput="filterMasterTable()">
+                        <input type="text" id="tableSearchInput" placeholder="Search customer, part, line, description, or source..." oninput="filterMasterTable()">
                     </div>
 
                     <div class="filter-dropdown-wrap">
@@ -221,16 +221,9 @@
                     </div>
 
                     <div class="filter-dropdown-wrap">
-                        <label for="recordsVersionFilter">Version:</label>
-                        <select id="recordsVersionFilter" onchange="filterMasterTable()">
-                            <option value="ALL">All versions</option>
-                        </select>
-                    </div>
-
-                    <div class="filter-dropdown-wrap">
                         <label for="recordsMonthFilter">Delivery month:</label>
-                        <select id="recordsMonthFilter" onchange="filterMasterTable()">
-                            <option value="ALL">All months</option>
+                        <select id="recordsMonthFilter" onchange="onRecordsMonthChange()">
+                            <option value="">Latest month</option>
                         </select>
                     </div>
                     <label class="col-toggle"><input type="checkbox" id="showAllColumns" onchange="toggleRecordColumns()"> Show all columns</label>
@@ -262,7 +255,6 @@
         <th class="num" id="recordsMonth1Label">Oct-26</th>
         <th class="num th-tentative" id="recordsMonth2Label">Nov-26</th>
         <th class="num th-tentative" id="recordsMonth3Label">Dec-26</th>
-        <th class="col-detail">Version</th>
         <th class="col-detail">Schedule Received</th>
         <th class="num">Actual Dispatch</th>
         <th class="num">Backlog</th>
@@ -300,17 +292,22 @@
                             <option value="">Loading sheets...</option>
                         </select>
                     </div>
-                    <div class="s-control-item">
-                        <label for="sameCustomerSelect"><strong>Customer:</strong></label>
-                        <select id="sameCustomerSelect" onchange="onScopeFilterChange()">
-                            <option value="ALL">All Customers</option>
-                        </select>
-                    </div>
-                    <div class="s-control-item">
-                        <label for="samePartSelect"><strong>Part:</strong></label>
-                            <select id="samePartSelect" onchange="onScopeFilterChange()">
-                            <option value="">All parts</option>
-                        </select>
+                    <div class="s-control-item s-control-wide">
+                        <label for="analysisScopeInput"><strong>Customer / Part / Line:</strong></label>
+                        <div class="scope-combo" id="analysisScopeCombo">
+                            <input
+                                type="text"
+                                id="analysisScopeInput"
+                                class="scope-input"
+                                placeholder="All customers & parts — type company, part, or line (e.g. blower)..."
+                                autocomplete="off"
+                                onfocus="openScopeDropdown()"
+                                oninput="onScopeInput()"
+                                onkeydown="onScopeKeydown(event)"
+                            >
+                            <button type="button" id="analysisScopeClear" class="scope-clear-btn" onclick="clearAnalysisScope()" title="Reset to all customers & parts" style="display:none;">✕</button>
+                            <div id="analysisScopeDropdown" class="scope-dropdown" style="display:none;"></div>
+                        </div>
                     </div>
                     <div class="s-control-item">
                         <label for="sameMetricMonth"><strong>Month:</strong></label>
@@ -359,9 +356,11 @@
         </div>
         <div class="cmp-trend-controls">
             <div class="range-toggle" id="cmpRangeToggle">
-                <button type="button" class="active" data-range="6" onclick="setCmpRange(6)">6 months</button>
-                <button type="button" data-range="12" onclick="setCmpRange(12)">1 year</button>
+                <button type="button" class="active" data-range="6" onclick="setCmpRange('6')">6 months</button>
+                <button type="button" data-range="12" onclick="setCmpRange('12')">1 year</button>
+                <button type="button" data-range="all" onclick="setCmpRange('all')">All</button>
             </div>
+            <select id="cmpYearSelect" class="cmp-year-select" onchange="onCmpYearChange()" style="display:none;" title="Select year"></select>
             <label class="cmp-target">Target
                 <input type="number" id="cmpTargetInput" min="50" max="100" value="95" onchange="renderTrendChart(); renderLineTable();"> %
             </label>
