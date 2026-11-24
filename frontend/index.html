@@ -58,6 +58,10 @@
                 <span class="nav-icon">📤</span>
                 <span class="nav-label">Upload</span>
             </button>
+            <button class="nav-tab" data-tab="users" id="navTabUsers" onclick="switchTab('users')" title="Users" style="display: none;">
+                <span class="nav-icon">👥</span>
+                <span class="nav-label">Users</span>
+            </button>
         </nav>
     </aside>
     <main class="main-content">
@@ -559,6 +563,62 @@
                 </div>
             </div>
 
+        </section>
+        <!-- ============================================================== -->
+        <!-- TAB 6: USER MANAGEMENT (ADMIN ONLY)                            -->
+        <!-- ============================================================== -->
+        <section id="tab-users" class="tab-pane">
+            <div class="content-panel">
+                <div class="panel-header">
+                    <div>
+                        <h2>User Management</h2>
+                        <p class="panel-subtitle">Add or remove portal accounts. Changes are saved to the server's user store.</p>
+                    </div>
+                    <button type="button" class="btn-outline-sm" onclick="loadAdminUsers()">🔄 Refresh Users</button>
+                </div>
+
+                <form id="createUserForm" class="admin-user-form" onsubmit="handleCreateUserSubmit(event)">
+                    <div class="admin-user-field">
+                        <label for="newUserFullName">Full Name</label>
+                        <input type="text" id="newUserFullName" class="form-input" placeholder="e.g. Ravi Kumar">
+                    </div>
+                    <div class="admin-user-field">
+                        <label for="newUserUsername">Username <span class="required-mark">*</span></label>
+                        <input type="text" id="newUserUsername" class="form-input" placeholder="e.g. rkumaar" required>
+                    </div>
+                    <div class="admin-user-field">
+                        <label for="newUserPassword">Password <span class="required-mark">*</span></label>
+                        <input type="password" id="newUserPassword" class="form-input" placeholder="Min 6 characters" required>
+                    </div>
+                    <div class="admin-user-field">
+                        <label for="newUserRole">Role</label>
+                        <select id="newUserRole" class="form-input">
+                            <option value="planner">Planner</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                    </div>
+                    <div class="admin-user-submit">
+                        <button type="submit" id="createUserBtn" class="btn-submit">+ Add User</button>
+                    </div>
+                </form>
+
+                <div class="table-responsive" style="margin-top: 22px;">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Name</th>
+                                <th>Username</th>
+                                <th>Role</th>
+                                <th style="text-align: right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminUsersTableBody">
+                            <tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">Loading users...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </section>
 
     </main> 

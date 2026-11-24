@@ -69,10 +69,132 @@ async function logoutPortal() {
 function renderAuthUserChip(user) {
     const chip = document.getElementById("authUserChip");
     const nameEl = document.getElementById("authUserName");
-    if (!chip || !nameEl || !user) return;
-    const roleLabel = user.role ? ` (${user.role})` : "";
-    nameEl.textContent = `${user.name || user.username}${roleLabel}`;
-    chip.style.display = "inline-flex";
+    const usersTab = document.getElementById("navTabUsers");
+    if (!user) return;
+    if (chip && nameEl) {
+        const roleLabel = user.role ? ` (${user.role})` : "";
+        nameEl.textContent = `${user.name || user.username}${roleLabel}`;
+        chip.style.display = "inline-flex";
+    }
+    if (usersTab) {
+        const isAdmin = String(user.role || "").toLowerCase() === "admin";
+        usersTab.style.display = isAdmin ? "" : "none";
+        if (!isAdmin && document.getElementById("tab-users")?.classList.contains("active")) {
+            switchTab("dashboard");
+        }
+    }
+}
+
+async function loadAdminUsers() {
+    const tbody = document.getElementById("adminUsersTableBody");
+    if (!tbody) return;
+
+    const currentUser = getStoredUser();
+    if (String(currentUser?.role || "").toLowerCase() !== "admin") {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #b91c1c; padding: 20px;">Admin privileges required.</td></tr>`;
+        return;
+    }
+
+    try {
+        const res = await fetch(apiUrl("/api/users"));
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || "Failed to load users.");
+
+        const users = Array.isArray(data.users) ? data.users : [];
+        if (!users.length) {
+            tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">No users found.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = users.map((u, idx) => {
+            const isSelf = u.id === currentUser.id;
+            const roleBadgeCls = u.role === "admin" ? "badge-accent" : "tag";
+            return `
+                <tr>
+                    <td>${idx + 1}</td>
+                    <td><strong>${escapeHTML(u.name || u.username)}</strong></td>
+                    <td><code>${escapeHTML(u.username)}</code></td>
+                    <td><span class="${roleBadgeCls}">${escapeHTML(u.role)}</span></td>
+                    <td style="text-align: right;">
+                        ${isSelf
+                            ? `<span class="muted">Current session</span>`
+                            : `<button type="button" class="btn-action-icon btn-delete-row" data-id="${escapeHTML(u.id)}" data-username="${escapeHTML(u.username)}" onclick="deleteAdminUser(this.dataset.id, this.dataset.username)" title="Remove user">🗑️</button>`
+                        }
+                    </td>
+                </tr>
+            `;
+        }).join("");
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #dc2626; padding: 20px;">${escapeHTML(err.message)}</td></tr>`;
+    }
+}
+
+async function handleCreateUserSubmit(event) {
+    event.preventDefault();
+    const nameInput = document.getElementById("newUserFullName");
+    const userInput = document.getElementById("newUserUsername");
+    const passInput = document.getElementById("newUserPassword");
+    const roleSelect = document.getElementById("newUserRole");
+    const submitBtn = document.getElementById("createUserBtn");
+
+    const payload = {
+        name: (nameInput?.value || "").trim(),
+        username: (userInput?.value || "").trim(),
+        password: passInput?.value || "",
+        role: roleSelect?.value || "planner"
+    };
+
+    if (!payload.username || !payload.password) {
+        showToast("Username and password are required.", "error");
+        return;
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Adding...";
+    }
+
+    try {
+        const res = await fetch(apiUrl("/api/users"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || "Could not create user.");
+
+        if (nameInput) nameInput.value = "";
+        if (userInput) userInput.value = "";
+        if (passInput) passInput.value = "";
+        if (roleSelect) roleSelect.value = "planner";
+
+        showToast(`User "${data.user?.username || payload.username}" added.`, "success");
+        await loadAdminUsers();
+    } catch (err) {
+        showToast(err.message, "error");
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = "+ Add User";
+        }
+    }
+}
+
+async function deleteAdminUser(userId, username) {
+    if (!confirm(`Remove user "${username}"? They will no longer be able to sign in.`)) return;
+
+    try {
+        const res = await fetch(apiUrl(`/api/users/${encodeURIComponent(userId)}`), {
+            method: "DELETE"
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || "Could not remove user.");
+
+        showToast(`User "${username}" removed.`, "info");
+        await loadAdminUsers();
+    } catch (err) {
+        showToast(err.message, "error");
+    }
 }
 
 // Automatically attach Bearer token to requests hitting the API base URL
@@ -175,6 +297,9 @@ function switchTab(tabId) {
     if (tabId === "upload") {
         loadImportedFilesList();
     }
+    if (tabId === "users") {
+        loadAdminUsers();
+    } 
 }
 
 // Live Clock

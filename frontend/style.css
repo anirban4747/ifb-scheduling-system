@@ -2132,3 +2132,38 @@ body.login-body { overflow: auto; }
 .btn-logout:hover {
     background: #be123c;
 }
+/* ===== Admin User Management ===== */
+.admin-user-form {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+    gap: 14px;
+    align-items: end;
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+}
+
+.admin-user-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.admin-user-field label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.admin-user-field .form-input {
+    max-width: none;
+    padding: 8px 10px;
+}
+
+@media (max-width: 960px) {
+    .admin-user-form {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+    }
+}

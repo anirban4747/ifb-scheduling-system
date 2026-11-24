@@ -129,10 +129,91 @@ function requireAuth(req, res, next) {
     return next();
 }
 
+function requireAdmin(req, res, next) {
+    if (!req.user || String(req.user.role || "").toLowerCase() !== "admin") {
+        return res.status(403).json({ error: "Forbidden", message: "Admin access is required to manage users." });
+    }
+    return next();
+}
+
+function listUsersSafe() {
+    return loadUsers().map(u => ({
+        id: u.id,
+        username: u.username,
+        name: u.name || u.username,
+        role: u.role || "planner"
+    }));
+}
+
+function createPortalUser({ username, password, name, role = "planner" }) {
+    const cleanUsername = String(username || "").trim();
+    const cleanPassword = String(password || "");
+    const cleanName = String(name || cleanUsername).trim();
+    const cleanRole = ["admin", "planner"].includes(String(role || "").toLowerCase())
+        ? String(role).toLowerCase()
+        : "planner";
+
+    if (!/^[a-zA-Z0-9._-]{3,32}$/.test(cleanUsername)) {
+        return { error: "Username must be 3–32 letters, numbers, dots, underscores, or hyphens." };
+    }
+    if (cleanPassword.length < 6) {
+        return { error: "Password must be at least 6 characters." };
+    }
+
+    const users = loadUsers();
+    if (users.some(u => String(u.username || "").toLowerCase() === cleanUsername.toLowerCase())) {
+        return { error: `Username "${cleanUsername}" already exists.` };
+    }
+
+    const newUser = {
+        id: `usr-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`,
+        username: cleanUsername,
+        name: cleanName || cleanUsername,
+        role: cleanRole,
+        passwordHash: hashPassword(cleanPassword)
+    };
+
+    users.push(newUser);
+    saveUsers(users);
+
+    return {
+        user: {
+            id: newUser.id,
+            username: newUser.username,
+            name: newUser.name,
+            role: newUser.role
+        }
+    };
+}
+
+function deletePortalUser(userId, actingUserId) {
+    if (!userId) return { error: "User ID is required." };
+    if (userId === actingUserId) {
+        return { error: "You cannot delete the account you are currently signed in with." };
+    }
+
+    const users = loadUsers();
+    const target = users.find(u => u.id === userId || u.username === userId);
+    if (!target) return { error: "User not found." };
+
+    const remaining = users.filter(u => u.id !== target.id);
+    const adminCount = remaining.filter(u => String(u.role || "").toLowerCase() === "admin").length;
+    if (String(target.role || "").toLowerCase() === "admin" && adminCount === 0) {
+        return { error: "At least one admin account must remain." };
+    }
+
+    saveUsers(remaining);
+    return { deletedUserId: target.id };
+}
+
 module.exports = {
     loadUsers,
     authenticateUser,
     createToken,
     verifyToken,
-    requireAuth
+    requireAuth,
+    requireAdmin,
+    listUsersSafe,
+    createPortalUser,
+    deletePortalUser
 };

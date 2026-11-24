@@ -713,17 +713,26 @@ function compareWithinSameSheet(snapshots, options = {}) {
         } else if (rangeKey === "12") {
             windowMonths = Array.from({ length: 12 }, (_, i) => `${activeYear}-${String(i + 1).padStart(2, "0")}`);
         } else {
+            const earliestMonth = sortedMonths.length ? sortedMonths[0] : validMonth;
             const latestMonth = sortedMonths.length ? sortedMonths[sortedMonths.length - 1] : validMonth;
+            const defaultSixStart = latestMonth ? shiftMonthKey(latestMonth, -5) : "";
+
             let windowStart = "";
-            if (!validMonth || !latestMonth || validMonth === latestMonth) {
-                const anchor = latestMonth || validMonth;
-                windowStart = anchor ? shiftMonthKey(anchor, -5) : "";
+            if (!validMonth || !latestMonth) {
+                windowStart = validMonth || latestMonth || "";
             } else if (validMonth > latestMonth) {
                 windowStart = shiftMonthKey(validMonth, -5);
+            } else if (defaultSixStart && validMonth >= defaultSixStart) {
+                // Within the latest 6 months: keep the latest 6-month window anchored
+                windowStart = defaultSixStart;
+            } else if (earliestMonth && shiftMonthKey(validMonth, -4) < earliestMonth) {
+                // Near the start of available data (no prior data): start at the selected month
+                windowStart = validMonth;
             } else {
-                // Different month selected: 4 months before + selected + 1 month after = 6 total
+                // Middle months: 4 months before + selected + 1 month after = 6 total
                 windowStart = shiftMonthKey(validMonth, -4);
             }
+
             windowMonths = windowStart
                 ? Array.from({ length: 6 }, (_, i) => shiftMonthKey(windowStart, i))
                 : [];

@@ -15,7 +15,11 @@ const {
     loadUsers,
     authenticateUser,
     createToken,
-    requireAuth
+    requireAuth,
+    requireAdmin,
+    listUsersSafe,
+    createPortalUser,
+    deletePortalUser
 } = require("./auth");
 
 const app = express();
@@ -796,6 +800,9 @@ const upload = multer({
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../frontend")));
+app.get("/health", (req, res) => {
+    res.status(200).json({ status: "ok" });
+});
 
 // Serve index.html and login.html
 app.get("/", (req, res) => {
@@ -842,6 +849,30 @@ app.post("/api/auth/logout", (req, res) => {
 
 // Protect all schedule, dashboard, analytics, and upload routes below
 app.use(requireAuth);
+
+// ==========================================================================
+// ADMIN USER MANAGEMENT ENDPOINTS
+// ==========================================================================
+
+app.get("/api/users", requireAdmin, (req, res) => {
+    return res.json({ users: listUsersSafe() });
+});
+
+app.post("/api/users", requireAdmin, (req, res) => {
+    const result = createPortalUser(req.body || {});
+    if (result.error) {
+        return res.status(400).json({ message: result.error });
+    }
+    return res.status(201).json({ user: result.user });
+});
+
+app.delete("/api/users/:id", requireAdmin, (req, res) => {
+    const result = deletePortalUser(req.params.id, req.user.id);
+    if (result.error) {
+        return res.status(400).json({ message: result.error });
+    }
+    return res.json({ success: true, deletedUserId: result.deletedUserId });
+});
 
 // Download sample Excel schedule template
 app.get("/api/sample-template", (req, res) => {
@@ -1436,7 +1467,7 @@ async function startServer() {
     console.log(`Loaded ${scheduleSnapshots.length} historical schedule snapshots.`);
     refreshExistingSnapshots();
     await initializeDatabase();
-    app.listen(PORT, () => {
+    app.listen(PORT, "0.0.0.0", () => {
         console.log(`Server running on port ${PORT}`);
     });
 }
