@@ -10,9 +10,88 @@ const API_BASE_URL = ["3000", "3001"].includes(window.location.port)
     ? ""
     : `${window.location.protocol}//${window.location.hostname}:3001`;
 
+const AUTH_TOKEN_KEY = "ifb_auth_token";
+const AUTH_USER_KEY = "ifb_auth_user";
+const NATIVE_FETCH = window.fetch.bind(window);
+
 function apiUrl(path) {
     return `${API_BASE_URL}${path}`;
 }
+
+function getAuthToken() {
+    return localStorage.getItem(AUTH_TOKEN_KEY) || "";
+}
+
+function getStoredUser() {
+    try {
+        return JSON.parse(localStorage.getItem(AUTH_USER_KEY) || "null");
+    } catch {
+        return null;
+    }
+}
+
+function getLoginPageUrl() {
+    return ["3000", "3001"].includes(window.location.port)
+        ? "/login"
+        : "login.html";
+}
+
+function redirectToLogin() {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    if (!window.location.pathname.endsWith("/login") && !window.location.pathname.endsWith("login.html")) {
+        window.location.replace(getLoginPageUrl());
+    }
+}
+
+function withTokenQuery(urlStr) {
+    const token = getAuthToken();
+    if (!token) return urlStr;
+    const sep = urlStr.includes("?") ? "&" : "?";
+    return `${urlStr}${sep}token=${encodeURIComponent(token)}`;
+}
+
+async function logoutPortal() {
+    const token = getAuthToken();
+    try {
+        if (token) {
+            await NATIVE_FETCH(apiUrl("/api/auth/logout"), {
+                method: "POST",
+                headers: { Authorization: `Bearer ${token}` }
+            });
+        }
+    } catch {
+        // Ignore network errors on logout
+    }
+    redirectToLogin();
+}
+
+function renderAuthUserChip(user) {
+    const chip = document.getElementById("authUserChip");
+    const nameEl = document.getElementById("authUserName");
+    if (!chip || !nameEl || !user) return;
+    const roleLabel = user.role ? ` (${user.role})` : "";
+    nameEl.textContent = `${user.name || user.username}${roleLabel}`;
+    chip.style.display = "inline-flex";
+}
+
+// Automatically attach Bearer token to requests hitting the API base URL
+window.fetch = async (input, init = {}) => {
+    const urlStr = typeof input === "string" ? input : (input && input.url) || "";
+    const isApiRequest = urlStr.startsWith("/") || (API_BASE_URL && urlStr.startsWith(API_BASE_URL));
+    const token = getAuthToken();
+
+    const headers = new Headers(init.headers || (typeof input !== "string" && input?.headers) || {});
+    if (isApiRequest && token && !headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${token}`);
+    }
+
+    const response = await NATIVE_FETCH(input, { ...init, headers });
+    if (isApiRequest && response.status === 401 && !urlStr.includes("/api/auth/")) {
+        redirectToLogin();
+    }
+    return response;
+};
 
 const DEFAULT_MASTER_DATA = {
     customers: [],
@@ -1318,16 +1397,91 @@ function quickSelectCustomer(customer) {
 const DASH_TARGET = 95;
 const DASH_COLORS = { "st-green": "#22c55e", "st-amber": "#f59e0b", "st-red": "#ef4444", "st-grey": "#94a3b8" };
 let dashSnapshotId = "";
+let dashAvailableMonths = [];
 let dashRunId = 0;
+
+function getDashboardMonthList() {
+    if (dashAvailableMonths.length) return [...dashAvailableMonths].sort();
+    return getAvailableRecordMonths(allScheduleRows);
+}
+
+function populateDashboardMonthOptions(year, preferredMonthKey) {
+    const monthSelect = document.getElementById("dashboardMonth");
+    if (!monthSelect) return;
+
+    const monthsForYear = getDashboardMonthList().filter(m => m.startsWith(`${year}-`));
+    if (!monthsForYear.length) {
+        const now = new Date();
+        const fallback = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        const label = new Intl.DateTimeFormat("en", { month: "long", timeZone: "UTC" }).format(new Date(`${fallback}-01T00:00:00Z`));
+        monthSelect.innerHTML = `<option value="${fallback}">${label}</option>`;
+        monthSelect.value = fallback;
+        return;
+    }
+
+    monthSelect.innerHTML = monthsForYear.map(m => {
+        const label = new Intl.DateTimeFormat("en", { month: "long", timeZone: "UTC" })
+            .format(new Date(`${m}-01T00:00:00Z`));
+        return `<option value="${escapeHTML(m)}">${escapeHTML(label)}</option>`;
+    }).join("");
+
+    monthSelect.value = preferredMonthKey && monthsForYear.includes(preferredMonthKey)
+        ? preferredMonthKey
+        : monthsForYear[monthsForYear.length - 1];
+}
+
+function syncDashboardMonthControls(forceLatest = false) {
+    const yearSelect = document.getElementById("dashboardYear");
+    const monthSelect = document.getElementById("dashboardMonth");
+    if (!yearSelect || !monthSelect) return;
+
+    const months = getDashboardMonthList();
+    if (!months.length) {
+        const now = new Date();
+        const y = String(now.getFullYear());
+        yearSelect.innerHTML = `<option value="${y}">${y}</option>`;
+        yearSelect.value = y;
+        populateDashboardMonthOptions(y, "");
+        return;
+    }
+
+    const years = [...new Set(months.map(m => m.slice(0, 4)))].sort();
+    const prevMonth = forceLatest ? "" : monthSelect.value;
+    const targetMonth = prevMonth && months.includes(prevMonth) ? prevMonth : months[months.length - 1];
+    const targetYear = targetMonth.slice(0, 4);
+
+    yearSelect.innerHTML = years.map(y => `<option value="${escapeHTML(y)}">${escapeHTML(y)}</option>`).join("");
+    yearSelect.value = targetYear;
+    populateDashboardMonthOptions(targetYear, targetMonth);
+}
+
+function onDashboardYearChange() {
+    const yearSelect = document.getElementById("dashboardYear");
+    const monthSelect = document.getElementById("dashboardMonth");
+    if (!yearSelect) return;
+    const prevMonthNum = monthSelect?.value ? monthSelect.value.slice(5, 7) : "";
+    const candidate = prevMonthNum ? `${yearSelect.value}-${prevMonthNum}` : "";
+    populateDashboardMonthOptions(yearSelect.value, candidate);
+    onDashboardMonthChange();
+}
 
 function renderDashboardForCustomer() {
     refreshDashboardInsights();
 }
 
 function selectDashMonth(month) {
-    const input = document.getElementById("dashboardMonth");
-    if (!input || input.value === month) return;
-    input.value = month;
+    const yearSelect = document.getElementById("dashboardYear");
+    const monthSelect = document.getElementById("dashboardMonth");
+    if (!monthSelect || !/^\d{4}-\d{2}$/.test(month) || monthSelect.value === month) return;
+
+    const targetYear = month.slice(0, 4);
+    if (yearSelect && [...yearSelect.options].some(o => o.value === targetYear)) {
+        yearSelect.value = targetYear;
+        populateDashboardMonthOptions(targetYear, month);
+    }
+    if ([...monthSelect.options].some(o => o.value === month)) {
+        monthSelect.value = month;
+    }
     onDashboardMonthChange();
 }
 
@@ -1358,6 +1512,8 @@ async function refreshDashboardInsights() {
             if (!metaRes.ok) throw new Error("Could not load schedule sheets.");
             const meta = await metaRes.json();
             dashSnapshotId = meta.currentSnapshotId || "";
+            dashAvailableMonths = (meta.availableMonths || []).filter(m => /^\d{4}-\d{2}$/.test(m)).sort();
+            syncDashboardMonthControls(false);
         }
         if (runId !== dashRunId) return;
         const month = getSelectedMonthKey();
@@ -1818,7 +1974,7 @@ async function loadImportedFilesList() {
 }
 
 function downloadImportedFile(snapshotId) {
-    window.location.href = apiUrl(`/api/download-file/${encodeURIComponent(snapshotId)}`);
+    window.location.href = withTokenQuery(apiUrl(`/api/download-file/${encodeURIComponent(snapshotId)}`));
 }
 
 async function deleteImportedFile(snapshotId, filename) {
@@ -1834,6 +1990,7 @@ async function deleteImportedFile(snapshotId, filename) {
         const result = await res.json();
         showToast("Workbook & snapshot deleted successfully", "success");
         dashSnapshotId = "";
+        dashAvailableMonths = [];
 
         if (Array.isArray(result.rows)) {
             allScheduleRows = result.rows;
@@ -1960,6 +2117,7 @@ async function uploadExcel() {
 
             allScheduleRows = importedRows;
             dashSnapshotId = "";
+            dashAvailableMonths = [];
             await loadMasterData();
             activeCustomer = "ALL";
             pickDefaultMonth(allScheduleRows);
@@ -2003,12 +2161,8 @@ async function uploadExcel() {
 // INITIAL DATA LOADER
 // ==========================================================================
 
-function pickDefaultMonth(rows) {
-    const input = document.getElementById("dashboardMonth");
-    const months = new Set();
-    rows.forEach(r => Object.keys(r.monthlySchedules || {}).forEach(m => months.add(m)));
-    if (!input || !months.size || months.has(input.value)) return;
-    input.value = [...months].sort().pop();
+function pickDefaultMonth() {
+    syncDashboardMonthControls(true);
 }
 
 async function loadDashboardData() {
@@ -2029,8 +2183,31 @@ async function loadDashboardData() {
 }
 
 async function initApplication() {
+    const token = getAuthToken();
+    if (!token) {
+        redirectToLogin();
+        return;
+    }
+
+    let currentUser = getStoredUser();
+    try {
+        const authRes = await fetch(apiUrl("/api/auth/me"));
+        if (!authRes.ok) {
+            redirectToLogin();
+            return;
+        }
+        const authData = await authRes.json();
+        if (authData.user) {
+            currentUser = authData.user;
+            localStorage.setItem(AUTH_USER_KEY, JSON.stringify(currentUser));
+        }
+    } catch {
+        // Keep cached user if offline, otherwise loadDashboardData will report server error
+    }
+    renderAuthUserChip(currentUser);
+
     try { localStorage.removeItem("company-analysis-filter-state"); } catch (e) {}
-    document.querySelectorAll('a[href="/api/sample-template"]').forEach(a => { a.href = apiUrl("/api/sample-template"); });
+    document.querySelectorAll('a[href="/api/sample-template"]').forEach(a => { a.href = withTokenQuery(apiUrl("/api/sample-template")); });
     startClock();
     initializeSnapshotDate();
     initDragAndDrop();

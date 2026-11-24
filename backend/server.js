@@ -11,6 +11,12 @@ const {
     getSnapshotComparisonMeta
 } = require("./schedule-analytics");
 const { getScheduleRecords } = require("./excel-header");
+const {
+    loadUsers,
+    authenticateUser,
+    createToken,
+    requireAuth
+} = require("./auth");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3001);
@@ -782,10 +788,51 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../frontend")));
 
-// Serve index.html explicitly for root route
+// Serve index.html and login.html
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "../frontend/index.html"));
 });
+
+app.get("/login", (req, res) => {
+    res.sendFile(path.join(__dirname, "../frontend/login.html"));
+});
+
+// ==========================================================================
+// AUTHENTICATION ENDPOINTS (PUBLIC)
+// ==========================================================================
+
+app.post("/api/auth/login", (req, res) => {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+        return res.status(400).json({ message: "Username and password are required." });
+    }
+
+    const user = authenticateUser(username, password);
+    if (!user) {
+        return res.status(401).json({ message: "Invalid username or password." });
+    }
+
+    const token = createToken(user);
+    return res.json({ token, user });
+});
+
+app.get("/api/auth/me", requireAuth, (req, res) => {
+    return res.json({
+        user: {
+            id: req.user.id,
+            username: req.user.username,
+            name: req.user.name,
+            role: req.user.role
+        }
+    });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+    return res.json({ success: true });
+});
+
+// Protect all schedule, dashboard, analytics, and upload routes below
+app.use(requireAuth);
 
 // Download sample Excel schedule template
 app.get("/api/sample-template", (req, res) => {
@@ -1371,6 +1418,9 @@ function refreshExistingSnapshots() {
 }
 
 async function startServer() {
+    const users = loadUsers();
+    console.log(`Loaded ${users.length} portal user accounts.`);
+    latestScheduleData = loadScheduleData();
     latestScheduleData = loadScheduleData();
     console.log(`Loaded ${latestScheduleData.length} saved schedule records.`);
     scheduleSnapshots = loadScheduleSnapshots();

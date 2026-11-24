@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign In — IFB Scheduling Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="login-body">
+
+    <header class="app-header">
+        <div class="header-container">
+            <div class="brand-block">
+                <div class="brand-logo-icon">IFB</div>
+                <div class="brand-text">
+                    <h1>IFB Manufacturing Solutions</h1>
+                    <p>Real-Time Production, Delivery Schedule &amp; Performance Portal</p>
+                </div>
+            </div>
+
+            <div class="header-status-block">
+                <div class="status-indicator">
+                    <span class="status-dot" id="loginStatusDot"></span>
+                    <span id="loginBackendStatus">Checking portal service...</span>
+                </div>
+                <div class="clock-display" id="loginClock">--:--:--</div>
+            </div>
+        </div>
+    </header>
+
+    <main class="login-wrapper">
+        <div class="login-card">
+            <div class="login-card-header">
+                <span class="login-badge">Authorized Access</span>
+                <h2>Portal Sign In</h2>
+                <p>Enter your credentials to access production schedules, analytics, and dispatch reports.</p>
+            </div>
+
+            <div id="loginErrorAlert" class="login-alert" role="alert" style="display: none;"></div>
+
+            <form id="loginForm" onsubmit="handleLoginSubmit(event)" novalidate>
+                <div class="login-field">
+                    <label for="loginUsername">Username</label>
+                    <input
+                        type="text"
+                        id="loginUsername"
+                        name="username"
+                        class="login-input"
+                        placeholder="Enter username"
+                        autocomplete="username"
+                        autofocus
+                        required
+                    >
+                </div>
+
+                <div class="login-field">
+                    <label for="loginPassword">Password</label>
+                    <div class="password-input-wrap">
+                        <input
+                            type="password"
+                            id="loginPassword"
+                            name="password"
+                            class="login-input"
+                            placeholder="Enter password"
+                            autocomplete="current-password"
+                            required
+                        >
+                        <button
+                            type="button"
+                            class="password-toggle-btn"
+                            id="togglePasswordBtn"
+                            onclick="toggleLoginPassword()"
+                            aria-label="Show password"
+                            title="Show password"
+                        >
+                            <svg id="eyeOpenIcon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <svg id="eyeSlashIcon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display: none;">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+                                <line x1="1" y1="1" x2="23" y2="23"></line>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <button type="submit" id="loginSubmitBtn" class="login-submit-btn">
+                    Sign In to Portal
+                </button>
+            </form>
+        </div>
+    </main>
+
+    <script>
+        const AUTH_TOKEN_KEY = "ifb_auth_token";
+        const AUTH_USER_KEY = "ifb_auth_user";
+        const LOGIN_API_BASE = ["3000", "3001"].includes(window.location.port)
+            ? ""
+            : `${window.location.protocol}//${window.location.hostname}:3001`;
+
+        function loginApiUrl(path) {
+            return `${LOGIN_API_BASE}${path}`;
+        }
+
+        function startLoginClock() {
+            const el = document.getElementById("loginClock");
+            if (!el) return;
+            const tick = () => {
+                el.textContent = new Date().toLocaleTimeString("en-IN", { hour12: false });
+            };
+            tick();
+            setInterval(tick, 1000);
+        }
+
+        function showLoginError(message) {
+            const alertEl = document.getElementById("loginErrorAlert");
+            if (!alertEl) return;
+            alertEl.textContent = message;
+            alertEl.style.display = "block";
+        }
+
+        function clearLoginError() {
+            const alertEl = document.getElementById("loginErrorAlert");
+            if (alertEl) {
+                alertEl.textContent = "";
+                alertEl.style.display = "none";
+            }
+        }
+
+        function toggleLoginPassword() {
+            const input = document.getElementById("loginPassword");
+            const btn = document.getElementById("togglePasswordBtn");
+            const eyeOpen = document.getElementById("eyeOpenIcon");
+            const eyeSlash = document.getElementById("eyeSlashIcon");
+            if (!input) return;
+
+            const showing = input.type === "text";
+            input.type = showing ? "password" : "text";
+            if (eyeOpen) eyeOpen.style.display = showing ? "block" : "none";
+            if (eyeSlash) eyeSlash.style.display = showing ? "none" : "block";
+            if (btn) {
+                const nextLabel = showing ? "Show password" : "Hide password";
+                btn.setAttribute("aria-label", nextLabel);
+                btn.setAttribute("title", nextLabel);
+            }
+        }
+
+        function redirectToPortal() {
+            const portalUrl = ["3000", "3001"].includes(window.location.port)
+                ? "/"
+                : "index.html";
+            window.location.replace(portalUrl);
+        }
+
+        async function checkExistingSession() {
+            const token = localStorage.getItem(AUTH_TOKEN_KEY);
+            const statusEl = document.getElementById("loginBackendStatus");
+            const dotEl = document.getElementById("loginStatusDot");
+
+            if (!token) {
+                if (statusEl) statusEl.textContent = "Sign In Required";
+                if (dotEl) dotEl.style.background = "#38bdf8";
+                return;
+            }
+
+            try {
+                const res = await fetch(loginApiUrl("/api/auth/me"), {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.user) localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+                    redirectToPortal();
+                    return;
+                }
+                localStorage.removeItem(AUTH_TOKEN_KEY);
+                localStorage.removeItem(AUTH_USER_KEY);
+            } catch {
+                // Backend unreachable; stay on login screen
+            }
+
+            if (statusEl) statusEl.textContent = "Sign In Required";
+            if (dotEl) dotEl.style.background = "#38bdf8";
+        }
+
+        async function handleLoginSubmit(event) {
+            event.preventDefault();
+            clearLoginError();
+
+            const usernameInput = document.getElementById("loginUsername");
+            const passwordInput = document.getElementById("loginPassword");
+            const submitBtn = document.getElementById("loginSubmitBtn");
+
+            const username = (usernameInput?.value || "").trim();
+            const password = passwordInput?.value || "";
+
+            if (!username || !password) {
+                showLoginError("Please enter both your username and password.");
+                (!username ? usernameInput : passwordInput)?.focus();
+                return;
+            }
+
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = "Signing in...";
+            }
+
+            try {
+                const res = await fetch(loginApiUrl("/api/auth/login"), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json().catch(() => ({}));
+
+                if (!res.ok || !data.token) {
+                    showLoginError(data.message || "Invalid username or password.");
+                    return;
+                }
+
+                localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+                if (data.user) {
+                    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+                }
+                redirectToPortal();
+            } catch {
+                showLoginError("Could not reach the server. Ensure the backend is running on port 3001.");
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = "Sign In to Portal";
+                }
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", () => {
+            startLoginClock();
+            checkExistingSession();
+        });
+    </script>
+</body>
+</html>

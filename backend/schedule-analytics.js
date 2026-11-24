@@ -713,14 +713,18 @@ function compareWithinSameSheet(snapshots, options = {}) {
         } else if (rangeKey === "12") {
             windowMonths = Array.from({ length: 12 }, (_, i) => `${activeYear}-${String(i + 1).padStart(2, "0")}`);
         } else {
-            let windowEnd = sortedMonths.length ? sortedMonths[sortedMonths.length - 1] : validMonth;
-            if (validMonth && (!windowEnd || validMonth > windowEnd)) windowEnd = validMonth;
-            let windowStart = windowEnd ? shiftMonthKey(windowEnd, -5) : "";
-            if (validMonth && validMonth < windowStart) {
-                windowStart = validMonth;
-                windowEnd = shiftMonthKey(validMonth, 5);
+            const latestMonth = sortedMonths.length ? sortedMonths[sortedMonths.length - 1] : validMonth;
+            let windowStart = "";
+            if (!validMonth || !latestMonth || validMonth === latestMonth) {
+                const anchor = latestMonth || validMonth;
+                windowStart = anchor ? shiftMonthKey(anchor, -5) : "";
+            } else if (validMonth > latestMonth) {
+                windowStart = shiftMonthKey(validMonth, -5);
+            } else {
+                // Different month selected: 4 months before + selected + 1 month after = 6 total
+                windowStart = shiftMonthKey(validMonth, -4);
             }
-            windowMonths = windowEnd
+            windowMonths = windowStart
                 ? Array.from({ length: 6 }, (_, i) => shiftMonthKey(windowStart, i))
                 : [];
         }
@@ -1019,9 +1023,9 @@ function getSnapshotComparisonMeta(snapshots, snapshotId) {
     const pairs = new Map();
     if (targetSnap) {
         (targetSnap.rows || []).forEach(r => {
-            if (r.monthlySchedules) {
-                Object.keys(r.monthlySchedules).forEach(m => months.add(m));
-            }
+            Object.keys(r.monthlySchedules || {}).forEach(m => { if (/^\d{4}-\d{2}$/.test(m)) months.add(m); });
+            Object.keys(r.monthlyCommitments || {}).forEach(m => { if (/^\d{4}-\d{2}$/.test(m)) months.add(m); });
+            Object.keys(r.monthlyDispatches || {}).forEach(m => { if (/^\d{4}-\d{2}$/.test(m)) months.add(m); });
             const dm = normalizeMonth(r.deliveryMonth);
             if (dm) months.add(dm);
             const cust = r.customerGroup || r.customer || r.customerCode;
