@@ -3,7 +3,6 @@ const assert = require("node:assert/strict");
 const {
     calculateScheduleAnalytics,
     getDemandSnapshotTimeline,
-    compareDifferentSheets,
     compareWithinSameSheet,
     getSnapshotComparisonMeta
 } = require("./schedule-analytics");
@@ -308,58 +307,6 @@ test("on-time performance does not use a snapshot captured before the due date",
     assert.equal(result.onTime.quantityRate, null);
 });
 
-test("compareDifferentSheets compares two sheets with revisions, additions, and removals", () => {
-    const snapshots = [
-        {
-            snapshotId: "sheet-1",
-            source: "Motor_Plan_Rev1.xlsx",
-            snapshotDate: "2026-10-01",
-            rows: [
-                { customer: "Whirlpool", partNo: "MTR-01", productDescription: "Motor A", monthlySchedules: { "2026-10": 1000 } },
-                { customer: "Whirlpool", partNo: "MTR-02", productDescription: "Motor B", monthlySchedules: { "2026-10": 500 } },
-                { customer: "Bosch", partNo: "MTR-03", productDescription: "Motor C", monthlySchedules: { "2026-10": 300 } }
-            ]
-        },
-        {
-            snapshotId: "sheet-2",
-            source: "Motor_Plan_Rev2.xlsx",
-            snapshotDate: "2026-10-10",
-            rows: [
-                { customer: "Whirlpool", partNo: "MTR-01", productDescription: "Motor A", monthlySchedules: { "2026-10": 1200 } }, // +200
-                { customer: "Whirlpool", partNo: "MTR-02", productDescription: "Motor B", monthlySchedules: { "2026-10": 400 } },  // -100
-                { customer: "Godrej", partNo: "MTR-04", productDescription: "Motor D", monthlySchedules: { "2026-10": 600 } }      // added
-                // MTR-03 removed
-            ]
-        }
-    ];
-
-    const result = compareDifferentSheets(snapshots, {
-        baseSnapshotId: "sheet-1",
-        compareSnapshotId: "sheet-2",
-        month: "2026-10",
-        customer: "ALL"
-    });
-
-    assert.equal(result.status, "available");
-    assert.equal(result.summary.baseTotal, 1800);
-    assert.equal(result.summary.compareTotal, 2200);
-    assert.equal(result.summary.netChange, 400);
-    assert.equal(result.summary.partsIncreased, 1);
-    assert.equal(result.summary.partsDecreased, 1);
-    assert.equal(result.summary.partsAdded, 1);
-    assert.equal(result.summary.partsRemoved, 1);
-    assert.ok(result.summary.takeaway.includes("Overall demand shifted"));
-
-    // Whirlpool only
-    const wpResult = compareDifferentSheets(snapshots, {
-        baseSnapshotId: "sheet-1",
-        compareSnapshotId: "sheet-2",
-        month: "2026-10",
-        customer: "Whirlpool"
-    });
-    assert.equal(wpResult.summary.baseTotal, 1500);
-    assert.equal(wpResult.summary.compareTotal, 1600);
-});
 
 test("compareWithinSameSheet compares Month A vs Month B in single sheet", () => {
     const snapshots = [

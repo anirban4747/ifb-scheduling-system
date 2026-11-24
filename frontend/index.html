@@ -90,15 +90,25 @@
                 </div>
             </div>
 
-            <div class="dashboard-grid">
-                <div class="card card-highlight">
-                    <div class="card-icon-wrap">📅</div>
-                    <div class="card-info">
-                        <h3>Customer Schedule</h3>
-                        <p id="dashSchedule">–</p>
-                        <small class="card-sub" id="dashScheduleSub"></small>
-                    </div>
+            <div class="schedule-trio">
+                <div class="sched-card">
+                    <span class="sched-label" id="schedPrevLabel">Previous month</span>
+                    <span class="sched-value" id="schedPrevValue">–</span>
+                    <span class="sched-delta" id="schedPrevDelta"></span>
                 </div>
+                <div class="sched-card sched-selected">
+                    <span class="sched-label" id="schedSelLabel">Selected month</span>
+                    <span class="sched-value" id="schedSelValue">–</span>
+                    <span class="sched-delta" id="schedSelDelta"></span>
+                </div>
+                <div class="sched-card">
+                    <span class="sched-label" id="schedNextLabel">Upcoming month</span>
+                    <span class="sched-value" id="schedNextValue">–</span>
+                    <span class="sched-delta" id="schedNextDelta"></span>
+                </div>
+            </div>
+
+            <div class="dashboard-grid three">
                 <div class="card">
                     <div class="card-icon-wrap">🚚</div>
                     <div class="card-info">
@@ -292,14 +302,15 @@
                     </div>
                     <div class="s-control-item">
                         <label for="sameCustomerSelect"><strong>Customer:</strong></label>
-                        <select id="sameCustomerSelect" onchange="runStreamlinedAnalysis()">
+                        <select id="sameCustomerSelect" onchange="onScopeFilterChange()">
                             <option value="ALL">All Customers</option>
                         </select>
                     </div>
                     <div class="s-control-item">
-                        <label for="samePartInput"><strong>Part:</strong></label>
-                        <input type="search" id="samePartInput" list="samePartList" placeholder="All parts (type to search)" onchange="runStreamlinedAnalysis()" onsearch="runStreamlinedAnalysis()">
-                        <datalist id="samePartList"></datalist>
+                        <label for="samePartSelect"><strong>Part:</strong></label>
+                            <select id="samePartSelect" onchange="onScopeFilterChange()">
+                            <option value="">All parts</option>
+                        </select>
                     </div>
                     <div class="s-control-item">
                         <label for="sameMetricMonth"><strong>Month:</strong></label>
@@ -359,6 +370,56 @@
     <div id="cmpTrendChart"></div>
 </div>
 
+<!-- COMPARISON BREAKDOWN TABLE -->
+            <div class="content-panel analysis-panel">
+                <div class="panel-header-with-actions">
+                    <div>
+                        <h3 id="comparisonTableTitle">Part-wise Schedule Comparison</h3>
+                        <p class="panel-subtitle" id="comparisonTableSubtitle">Customer request vs IFB</p>
+                    </div>
+                    <button type="button" class="btn-outline-sm" onclick="exportComparisonToCSV()">📥 Export to CSV</button>
+                </div>
+
+                <div class="table-toolbar">
+                    <div class="search-input-wrap">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="comparisonSearchInput" placeholder="Search customer, part no, line..." oninput="filterComparisonTable()">
+                    </div>
+                    <div class="range-toggle" id="cmpTargetToggle">
+                        <button type="button" class="active" data-target="commitment" onclick="setCompareTarget('commitment')">vs IFB Commitment</button>
+                        <button type="button" data-target="dispatch" onclick="setCompareTarget('dispatch')">vs IFB Dispatch</button>
+                    </div>
+                    <div class="filter-pills-wrap" id="comparisonFilterPills">
+                        <button type="button" class="chip-filter active" data-filter="all" onclick="setComparisonStatusFilter('all')">All (<span id="countPillAll">0</span>)</button>
+                        <button type="button" class="chip-filter chip-filter-inc" data-filter="increased" onclick="setComparisonStatusFilter('increased')">Above request (<span id="countPillInc">0</span>)</button>
+                        <button type="button" class="chip-filter chip-filter-dec" data-filter="decreased" onclick="setComparisonStatusFilter('decreased')">Short of request (<span id="countPillDec">0</span>)</button>
+                        <button type="button" class="chip-filter" data-filter="unchanged" onclick="setComparisonStatusFilter('unchanged')">Met (<span id="countPillUnchanged">0</span>)</button>
+                    </div>
+                </div>
+
+                <div class="table-responsive table-scroll">
+                    <table class="data-table">
+                        <thead>
+                                <tr id="comparisonTableHeaderRow">
+                                <th class="sortable" onclick="sortComparison('customer')">Customer</th>
+                                <th class="sortable" onclick="sortComparison('partNo')">Part No.</th>
+                                <th>Line</th>
+                                <th class="num sortable" id="thColBase" onclick="sortComparison('qtyA')">Customer Request</th>
+                                <th class="num sortable" id="thColCompare" onclick="sortComparison('qtyB')">IFB Commitment</th>
+                                <th class="num sortable" id="thColDiff" onclick="sortComparison('diff')">Difference</th>
+                                <th class="num sortable" id="thColPct" onclick="sortComparison('fulfillmentRate')">Fill %</th>
+                                <th class="num sortable" id="thColChange" onclick="sortComparison('scheduleChange')">Schedule Δ</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="comparisonTableBody">
+                            <tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">Select parameters above to view analysis.</td></tr>
+                        </tbody>
+                        <tfoot id="comparisonTableFoot"></tfoot>
+                    </table>
+                </div>
+            </div>
+
 <div id="cmpLinePanel" class="content-panel" style="display:none">
     <div class="panel-header-with-actions">
         <div>
@@ -382,52 +443,7 @@
     </div>
 </div>
 
-            <!-- COMPARISON BREAKDOWN TABLE -->
-            <div class="content-panel analysis-panel" style="margin-top: 20px;">
-                <div class="panel-header-with-actions">
-                    <div>
-                        <h3 id="comparisonTableTitle">Detailed Part Comparison</h3>
-                        <p class="panel-subtitle" id="comparisonTableSubtitle">Customer parts and fulfillment status</p>
-                    </div>
-                    <button type="button" class="btn-outline-sm" onclick="exportComparisonToCSV()">📥 Export to CSV</button>
-                </div>
-
-                <div class="table-toolbar">
-                    <div class="search-input-wrap">
-                        <span class="search-icon">🔍</span>
-                        <input type="text" id="comparisonSearchInput" placeholder="Search customer, part no, line..." oninput="filterComparisonTable()">
-                    </div>
-                    <div class="filter-pills-wrap" id="comparisonFilterPills">
-                        <button type="button" class="chip-filter active" data-filter="all" onclick="setComparisonStatusFilter('all')">All (<span id="countPillAll">0</span>)</button>
-                        <button type="button" class="chip-filter chip-filter-inc" data-filter="increased" onclick="setComparisonStatusFilter('increased')">Increased / Surplus (<span id="countPillInc">0</span>)</button>
-                        <button type="button" class="chip-filter chip-filter-dec" data-filter="decreased" onclick="setComparisonStatusFilter('decreased')">Decreased / Shortfall (<span id="countPillDec">0</span>)</button>
-                        <button type="button" class="chip-filter" data-filter="unchanged" onclick="setComparisonStatusFilter('unchanged')">Unchanged / Met (<span id="countPillUnchanged">0</span>)</button>
-                    </div>
-                </div>
-
-                <div class="table-responsive table-scroll">
-                    <table class="data-table">
-                        <thead>
-                            <tr id="comparisonTableHeaderRow">
-                                <th class="sortable" onclick="sortComparison('customer')">Customer</th>
-                                <th class="sortable" onclick="sortComparison('partNo')">Part No.</th>
-                                <th>Description</th>
-                                <th>Line</th>
-                                <th class="num sortable" id="thColBase" onclick="sortComparison('qtyA')">Committed Qty</th>
-                                <th class="num sortable" id="thColCompare" onclick="sortComparison('qtyB')">Dispatched Qty</th>
-                                <th class="num sortable" id="thColDiff" onclick="sortComparison('diff')">Difference</th>
-                                <th class="num sortable" id="thColPct" onclick="sortComparison('fulfillmentRate')">Fulfillment %</th>
-                                <th class="num sortable" id="thColChange" onclick="sortComparison('scheduleChange')">Schedule Δ</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="comparisonTableBody">
-                            <tr><td colspan="10" style="text-align: center; color: #64748b; padding: 24px;">Select parameters above to view analysis.</td></tr>
-                        </tbody>
-                        <tfoot id="comparisonTableFoot"></tfoot>
-                    </table>
-                </div>
-            </div>
+            
 
         </section>
 

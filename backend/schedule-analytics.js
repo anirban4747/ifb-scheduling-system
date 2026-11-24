@@ -56,6 +56,7 @@ function isHigherVersion(candidate, existing) {
 function matchesCustomer(row, customer) {
     return !customer || customer === "ALL"
         || String(row.customer || "").trim() === customer
+        || String(row.customerGroup || "").trim() === customer
         || String(row.customerCode || "").trim() === customer;
 }
 
@@ -514,8 +515,8 @@ function compareWithinSameSheet(snapshots, options = {}) {
     const matchedRows = (targetSnap.rows || []).filter(r =>
         matchesCustomer(r, customer) &&
         (!partFilter
-            || String(r.partNo || "").toLowerCase().includes(partFilter)
-            || String(r.customerPartNo || "").toLowerCase().includes(partFilter)));
+            || String(r.partNo || "").trim().toLowerCase() === partFilter
+            || String(r.customerPartNo || "").trim().toLowerCase() === partFilter));
 
     if (mode === "months") {
         const allMonthsInSheet = new Set();
@@ -678,16 +679,24 @@ function compareWithinSameSheet(snapshots, options = {}) {
 
         const rangeMonths = Number(range) === 12 ? 12 : 6;
         const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : "";
-        let windowEnd = sortedMonths.length ? sortedMonths[sortedMonths.length - 1] : validMonth;
-        if (validMonth && (!windowEnd || validMonth > windowEnd)) windowEnd = validMonth;
-        let windowStart = windowEnd ? shiftMonthKey(windowEnd, -(rangeMonths - 1)) : "";
-        if (validMonth && validMonth < windowStart) {
+        let windowMonths = [];
+
+        if (rangeMonths === 12) {
+            const anchor = validMonth || sortedMonths[sortedMonths.length - 1] || `${new Date().getFullYear()}-01`;
+            const year = anchor.slice(0, 4);
+            windowMonths = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
+        } else {
+            let windowEnd = sortedMonths.length ? sortedMonths[sortedMonths.length - 1] : validMonth;
+            if (validMonth && (!windowEnd || validMonth > windowEnd)) windowEnd = validMonth;
+            let windowStart = windowEnd ? shiftMonthKey(windowEnd, -(rangeMonths - 1)) : "";
+            if (validMonth && validMonth < windowStart) {
             windowStart = validMonth;
             windowEnd = shiftMonthKey(validMonth, rangeMonths - 1);
-        }
-        const windowMonths = windowEnd
+            }
+            windowMonths = windowEnd
             ? Array.from({ length: rangeMonths }, (_, i) => shiftMonthKey(windowStart, i))
             : [];
+        }
 
         const monthlyTrend = windowMonths.map(m => {
             let actCustSched = 0, commitment = 0, dispatched = 0;
@@ -804,6 +813,23 @@ function compareWithinSameSheet(snapshots, options = {}) {
             dispatchVsCustomer: customerDemand > 0 ? Math.round((demandDispatched / customerDemand) * 1000) / 10 : null
         };
 
+                // ---- customer demand for the months around the selected one (dashboard cards) ----
+        const demandAround = {};
+        if (validMonth) {
+            for (let offset = -2; offset <= 1; offset++) {
+                const mk = shiftMonthKey(validMonth, offset);
+                let total = 0;
+                let present = false;
+                for (const row of allEntityRows) {
+                    if (row.monthlySchedules && Object.prototype.hasOwnProperty.call(row.monthlySchedules, mk)) {
+                        total += Number(row.monthlySchedules[mk]) || 0;
+                        present = true;
+                    }
+                }
+                demandAround[mk] = { month: mk, label: formatMonthLabel(mk), demand: total, hasData: present };
+            }
+        }
+
         // ---- Summary computation (from all entity rows) ----
         let totalA = 0, totalB = 0;
         let partsOnTarget = 0, partsShortfall = 0, partsSurplus = 0;
@@ -835,9 +861,10 @@ function compareWithinSameSheet(snapshots, options = {}) {
                 partsNoCommitment++;
             }
 
-            if (qtyA === 0 && qtyB === 0) continue;
-
-            
+            const qtySchedule = getMetricValue(row, "schedule", month);
+            const qtyCommitment = getMetricValue(row, "commitment", month);
+            const qtyDispatch = getMetricValue(row, "dispatch", month);
+            if (qtyA === 0 && qtyB === 0 && qtySchedule === 0) continue;
 
             const fulfillmentRate = qtyA > 0 ? (qtyB / qtyA) * 100 : null;
             let status = diff < 0 ? "shortfall" : diff > 0 ? "surplus" : "fulfilled";
@@ -852,6 +879,9 @@ function compareWithinSameSheet(snapshots, options = {}) {
                 line: row.line || "-",
                 qtyA,
                 qtyB,
+                qtySchedule,
+                qtyCommitment,
+                qtyDispatch,
                 diff,
                 fulfillmentRate,
                 status
@@ -901,6 +931,7 @@ function compareWithinSameSheet(snapshots, options = {}) {
             monthlyTrend,
             byLine,
             byCustomer,
+            demandAround,
             demandCoverage,
             dataQuality,
             summary: {
@@ -956,6 +987,7 @@ function getSnapshotComparisonMeta(snapshots, snapshotId) {
     const months = new Set();
     const customers = new Set();
     const parts = new Map();
+    const pairs = new Map();
     if (targetSnap) {
         (targetSnap.rows || []).forEach(r => {
             if (r.monthlySchedules) {
@@ -966,6 +998,10 @@ function getSnapshotComparisonMeta(snapshots, snapshotId) {
             const cust = r.customerGroup || r.customer || r.customerCode;
             if (cust) customers.add(cust);
             if (r.partNo && !parts.has(r.partNo)) parts.set(r.partNo, r.productDescription || "");
+            if (cust && r.partNo) {
+                const pairKey = `${cust}||${r.partNo}`;
+                if (!pairs.has(pairKey)) pairs.set(pairKey, { customer: cust, partNo: r.partNo, description: r.productDescription || "" });
+            }
         });
     }
 
@@ -989,6 +1025,7 @@ function getSnapshotComparisonMeta(snapshots, snapshotId) {
         availableMonths: Array.from(months).sort(),
         availableCustomers: Array.from(customers).sort(),
         availableParts: Array.from(parts, ([partNo, description]) => ({ partNo, description })).sort((a, b) => a.partNo.localeCompare(b.partNo)),
+        availablePairs: Array.from(pairs.values()),
         allMonths: Array.from(allMonths).sort(),
         allCustomers: Array.from(allCustomers).sort(),
         availableMetrics: [

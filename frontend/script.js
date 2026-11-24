@@ -78,6 +78,7 @@ function showToast(message, type = "info") {
 // ==========================================================================
 
 function switchTab(tabId) {
+    document.querySelector(".main-content")?.scrollTo(0, 0);
     document.querySelectorAll(".nav-tab").forEach(tab => {
         tab.classList.toggle("active", tab.getAttribute("data-tab") === tabId);
     });
@@ -343,6 +344,48 @@ function updateDashboardMonthLabels() {
 let currentComparisonRows = [];
 let currentComparisonFilter = "all";
 
+let analysisPairs = [];   // [{ customer, partNo, description }] for the selected sheet
+
+function onScopeFilterChange() {
+    refreshCascadingFilters();
+    runStreamlinedAnalysis();
+}
+
+function refreshCascadingFilters() {
+    const custSel = document.getElementById("sameCustomerSelect");
+    const partSel = document.getElementById("samePartSelect");
+    if (!custSel || !partSel) return;
+
+    const selCust = custSel.value || "ALL";
+    const selPart = partSel.value || "";
+
+    // parts this customer orders
+    const partMap = new Map();
+    analysisPairs.forEach(p => {
+        if ((selCust === "ALL" || p.customer === selCust) && !partMap.has(p.partNo)) {
+            partMap.set(p.partNo, p.description);
+        }
+    });
+    // customers who order this part
+    const custSet = new Set();
+    analysisPairs.forEach(p => {
+        if (!selPart || p.partNo === selPart) custSet.add(p.customer);
+    });
+
+    const parts = [...partMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const customers = [...custSet].sort((a, b) => a.localeCompare(b));
+
+    partSel.innerHTML = `<option value="">All parts (${parts.length})</option>` + parts.map(([no, desc]) => {
+        const label = desc && desc !== "-" ? `${no} — ${desc.length > 32 ? desc.slice(0, 32) + "…" : desc}` : no;
+        return `<option value="${escapeHTML(no)}">${escapeHTML(label)}</option>`;
+    }).join("");
+    partSel.value = partMap.has(selPart) ? selPart : "";
+
+    custSel.innerHTML = `<option value="ALL">All customers (${customers.length})</option>` +
+        customers.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join("");
+    custSel.value = custSet.has(selCust) ? selCust : "ALL";
+}
+
 
 async function onSameSheetChange() {
     const sel = document.getElementById("sameSheetSelect");
@@ -378,7 +421,6 @@ async function loadComparisonMeta(selectedSnapshotId) {
         const sameSel = document.getElementById("sameSheetSelect");
         const sameCompareMonth = document.getElementById("sameCompareMonth");
         const sameMetricMonth = document.getElementById("sameMetricMonth");
-        const sameCustSel = document.getElementById("sameCustomerSelect");
 
         const snapshots = meta.snapshots || [];
 
@@ -411,22 +453,15 @@ async function loadComparisonMeta(selectedSnapshotId) {
 
         const months = meta.availableMonths || [];
         const monthOpt = m => `<option value="${escapeHTML(m)}">${formatMonthLabel(m)} (${m})</option>`;
-        setOptionsKeep(sameMetricMonth, months.map(monthOpt).join(""), months[0]);
+        setOptionsKeep(sameMetricMonth, months.map(monthOpt).join(""), months[months.length - 1]);
         setOptionsKeep(
             sameCompareMonth,
             `<option value="PREV">Previous month</option><option value="NONE">No comparison</option>` + months.map(monthOpt).join(""),
             "PREV"
         );
 
-        const customers = meta.availableCustomers || [];
-        const custOpt = c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`;
-        setOptionsKeep(sameCustSel, `<option value="ALL">All Customers</option>` + customers.map(custOpt).join(""));
-        const partList = document.getElementById("samePartList");
-        if (partList) {
-            partList.innerHTML = (meta.availableParts || []).map(p =>
-                `<option value="${escapeHTML(p.partNo)}" label="${escapeHTML(p.description || "")}"></option>`
-            ).join("");
-        }
+        analysisPairs = meta.availablePairs || [];
+        refreshCascadingFilters();
 
         return meta;
     } catch (err) {
@@ -493,7 +528,7 @@ function renderTrendChart() {
     if (!trend.length) { panel.style.display = "none"; return; }
     panel.style.display = "block";
         const custSel = document.getElementById("sameCustomerSelect")?.value || "ALL";
-    const partTxt = (document.getElementById("samePartInput")?.value || "").trim();
+    const partTxt = (document.getElementById("samePartSelect")?.value || "").trim();
     const scopeEl = document.getElementById("cmpTrendScope");
     if (scopeEl) {
         scopeEl.textContent = `${custSel === "ALL" ? "All customers" : custSel} · ${partTxt ? `Part: ${partTxt}` : "All parts"} · ${trend[0].label} to ${trend[trend.length - 1].label}. Click a month to select it; the chip is dispatched ÷ commitment.`;
@@ -626,7 +661,42 @@ async function checkDataQuality(snapshotId, name) {
 }
 
 let sameRunId = 0;
-let comparisonSort = { key: null, dir: "desc" };
+let comparisonSort = { key: "diff", dir: "asc" };
+
+let compareTarget = "commitment";   // "commitment" | "dispatch"
+let analysisRawRows = [];
+
+function setCompareTarget(target) {
+    compareTarget = target === "dispatch" ? "dispatch" : "commitment";
+    document.querySelectorAll("#cmpTargetToggle button").forEach(b =>
+        b.classList.toggle("active", b.dataset.target === compareTarget));
+    applyCompareTarget();
+}
+
+function applyCompareTarget() {
+    const isDispatch = compareTarget === "dispatch";
+    currentComparisonRows = analysisRawRows.map(r => {
+        const request = Number(r.qtySchedule) || 0;
+        const target = Number(isDispatch ? r.qtyDispatch : r.qtyCommitment) || 0;
+        const diff = target - request;
+        let status = diff < 0 ? "shortfall" : diff > 0 ? "surplus" : "fulfilled";
+        if (request <= 0 && target > 0) status = "unscheduled";
+        return {
+            ...r,
+            qtyA: request,
+            qtyB: target,
+            diff,
+            fulfillmentRate: request > 0 ? (target / request) * 100 : null,
+            status
+        };
+    });
+    updateCard("thColBase", "Customer Request");
+    updateCard("thColCompare", isDispatch ? "IFB Dispatch" : "IFB Commitment");
+    updateCard("thColDiff", "Difference");
+    updateCard("thColPct", "Fill %");
+    refreshStatusCounts();
+    renderComparisonTable();
+}
 
 function sortComparison(key) {
     comparisonSort = {
@@ -656,13 +726,13 @@ async function runSameSheetStreamlined() {
     const snapshotId = document.getElementById("sameSheetSelect")?.value;
     const month = document.getElementById("sameMetricMonth")?.value || "ALL";
     const customer = document.getElementById("sameCustomerSelect")?.value || "ALL";
-    const part = (document.getElementById("samePartInput")?.value || "").trim();
+    const part = (document.getElementById("samePartSelect")?.value || "").trim();
     const compareMonth = month !== "ALL" ? resolveCompareMonth(month) : "";
 
     const tbody = document.getElementById("comparisonTableBody");
 
     if (!snapshotId) {
-        if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #64748b; padding: 24px;">No Excel sheets uploaded yet.</td></tr>`;
+        if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">No Excel sheets uploaded yet.</td></tr>`;
         return;
     }
 
@@ -681,8 +751,9 @@ async function runSameSheetStreamlined() {
         if (runId !== sameRunId) return;   // a newer request replaced this one
 
         if (data.status !== "available") {
-            if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #64748b; padding: 24px;">${escapeHTML(data.message || "No data available for this selection.")}</td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 24px;">${escapeHTML(data.message || "No data available for this selection.")}</td></tr>`;
             hideCmpExtras();
+            analysisRawRows = [];
             currentComparisonRows = [];
             refreshStatusCounts();
             return;
@@ -709,7 +780,7 @@ async function runSameSheetStreamlined() {
         const hasChange = !!compareMonth && change?.status === "available";
         const changeByKey = new Map();
         if (hasChange) (change.rows || []).forEach(r => changeByKey.set(rowKey(r), r));
-        currentComparisonRows = (data.rows || []).map(r => {
+        analysisRawRows = (data.rows || []).map(r => {
             if (!hasChange) return { ...r, scheduleChange: null, schedulePrev: null };
             const c = changeByKey.get(rowKey(r));
             return { ...r, scheduleChange: c ? c.change : 0, schedulePrev: c ? c.qtyA : 0 };
@@ -719,7 +790,7 @@ async function runSameSheetStreamlined() {
         if (thChange) thChange.textContent = hasChange ? `Schedule Δ vs ${change.labelA}` : "Schedule Δ";
 
         const scope = customer === "ALL" ? "All Customers" : customer;
-        let subText = `${scope}${part ? ` · part "${part}"` : ""}`;
+            let subText = `${scope}${part ? ` · part ${part}` : ""} · ${data.sheet.source}`;
         if (hasChange) {
             const cs = change.summary;
             const sign = cs.netChange >= 0 ? "+" : "";
@@ -727,18 +798,17 @@ async function runSameSheetStreamlined() {
         }
         const titleEl = document.getElementById("comparisonTableTitle");
         const subEl = document.getElementById("comparisonTableSubtitle");
-        if (titleEl) titleEl.textContent = `Plan vs Dispatch: ${data.sheet.source} (${data.monthLabel})`;
+                if (titleEl) titleEl.textContent = `Part-wise Schedule Comparison · ${data.monthLabel}`;
         if (subEl) subEl.textContent = subText;
 
         cmpData = data;
         renderTrendChart();
         renderLineTable();
-        refreshStatusCounts();
-        renderComparisonTable();
+        applyCompareTarget();
     } catch (err) {
         console.error("runSameSheetStreamlined error:", err);
         showToast("Analysis failed: " + err.message, "error");
-        if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #b91c1c; padding: 24px;">Could not load analysis. ${escapeHTML(err.message)}</td></tr>`;
+        if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #b91c1c; padding: 24px;">Could not load analysis. ${escapeHTML(err.message)}</td></tr>`;
     }
 }
 
@@ -795,13 +865,12 @@ function renderComparisonTable() {
             (row.customer || "").toLowerCase().includes(query) ||
             (row.partNo || "").toLowerCase().includes(query) ||
             (row.customerPartNo || "").toLowerCase().includes(query) ||
-            (row.productDescription || "").toLowerCase().includes(query) ||
             (row.line || "").toLowerCase().includes(query)
         );
     }
 
     if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #94a3b8; padding: 24px;">No matching part records found.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #94a3b8; padding: 24px;">No matching part records found.</td></tr>`;
         const f = document.getElementById("comparisonTableFoot"); if (f) f.innerHTML = "";
         return;
     }
@@ -866,8 +935,7 @@ function renderComparisonTable() {
         return `<tr>
     <td class="cell-trunc" title="${escapeHTML(row.customer)}"><strong>${escapeHTML(row.customer)}</strong></td>
     <td><span class="part-chip">${escapeHTML(row.partNo)}</span></td>
-    <td class="cell-trunc" title="${escapeHTML(row.productDescription || "")}">${escapeHTML(row.productDescription || "–")}</td>
-    <td>${escapeHTML(row.line || "–")}</td>
+    <td>${escapeHTML(row.line || "-")}</td>
     <td class="num">${formatNumber(valA)}</td>
     <td class="num">${formatNumber(valB)}</td>
     <td class="num ${diffClass}">${diffDisplay}</td>
@@ -883,7 +951,7 @@ if (foot) {
     const tD = tB - tA;
     const tC = filtered.reduce((s, r) => s + (r.scheduleChange ?? 0), 0);
     const anyChange = filtered.some(r => r.scheduleChange != null);
-    foot.innerHTML = `<tr class="total-row"><td colspan="4">Total (${filtered.length} parts)</td>
+    foot.innerHTML = `<tr class="total-row"><td colspan="3">Total (${filtered.length} parts)</td>
         <td class="num">${formatNumber(tA)}</td><td class="num">${formatNumber(tB)}</td>
         <td class="num">${tD > 0 ? "+" : ""}${formatNumber(tD)}</td><td></td>
         <td class="num">${anyChange ? (tC > 0 ? "+" : "") + formatNumber(tC) : ""}</td><td></td></tr>`;
@@ -895,18 +963,14 @@ function exportComparisonToCSV() {
         showToast("No comparison data available to export.", "error");
         return;
     }
-    const headers = ["Customer", "Part No", "Description", "Line", "Baseline Qty", "Comparison Qty", "Difference", "Rate","Schedule Change", "Status"];
+    const headers = ["Customer", "Part No", "Line", "Customer Request",
+        compareTarget === "dispatch" ? "IFB Dispatch" : "IFB Commitment",
+        "Difference", "Fill %", "Schedule Change", "Status"];
     const rows = currentComparisonRows.map(r => [
-        `"${(r.customer || "").replace(/"/g, '""')}"`,
-        `"${(r.partNo || "").replace(/"/g, '""')}"`,
-        `"${(r.productDescription || "").replace(/"/g, '""')}"`,
-        `"${(r.line || "").replace(/"/g, '""')}"`,
-        r.baseQty ?? r.qtyA ?? 0,
-        r.compareQty ?? r.qtyB ?? 0,
-        r.change ?? r.diff ?? 0,
-        (r.percentChange ?? r.fulfillmentRate ?? 0).toFixed(2),
-        r.scheduleChange ?? "",
-        `"${r.status}"`
+        csvCell(r.customer), csvCell(r.partNo), csvCell(r.line),
+        r.qtyA ?? 0, r.qtyB ?? 0, r.diff ?? 0,
+        r.fulfillmentRate == null ? "" : r.fulfillmentRate.toFixed(2),
+        r.scheduleChange ?? "", csvCell(r.status)
     ]);
 
     const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
@@ -933,6 +997,13 @@ function onCustomerSelectChange() {
     renderDashboardForCustomer(activeCustomer);
 }
 
+function quickSelectCustomer(customer) {
+    const select = document.getElementById("customerSelect");
+    activeCustomer = customer || "ALL";
+    if (select) select.value = activeCustomer;
+    renderDashboardForCustomer(activeCustomer);
+}
+
 
 // ==========================================================================
 // DASHBOARD (reads the latest uploaded sheet through the analytics API)
@@ -955,13 +1026,15 @@ function selectDashMonth(month) {
 }
 
 function renderDashboardEmpty(message) {
-    ["dashSchedule", "dashDispatched", "dashFulfillment", "dashShortfall"].forEach(id => updateCard(id, "–"));
-    ["dashScheduleSub", "dashDispatchedSub", "dashFulfillmentSub", "dashShortfallSub", "dashTopShortSub"]
+    ["dashDispatched", "dashFulfillment", "dashShortfall"].forEach(id => updateCard(id, "–"));
+    ["dashDispatchedSub", "dashFulfillmentSub", "dashShortfallSub", "dashTopShortSub"]
         .forEach(id => updateCard(id, ""));
     updateCard("dashHeading", "Overview");
     updateCard("dashSubheading", message);
     const bar = document.getElementById("dashFulfillmentBar");
     if (bar) bar.style.width = "0%";
+    [["schedPrev", "Previous month"], ["schedSel", "Selected month"], ["schedNext", "Upcoming month"]]
+        .forEach(([prefix, title]) => paintScheduleCard(prefix, title, null, null));
     const chart = document.getElementById("dashTrendChart");
     if (chart) chart.innerHTML = `<p class="muted" style="padding:16px 4px">${escapeHTML(message)}</p>`;
     ["dashShortfallBody", "dashCustomerBody"].forEach(id => {
@@ -1009,24 +1082,52 @@ async function refreshDashboardInsights() {
     }
 }
 
+function paintScheduleCard(prefix, title, entry, base) {
+    const labelEl = document.getElementById(`${prefix}Label`);
+    const valueEl = document.getElementById(`${prefix}Value`);
+    const deltaEl = document.getElementById(`${prefix}Delta`);
+    if (!labelEl || !valueEl || !deltaEl) return;
+
+    deltaEl.className = "sched-delta";
+    if (!entry) {
+        labelEl.textContent = title;
+        valueEl.textContent = "–";
+        deltaEl.textContent = "";
+        return;
+    }
+    labelEl.textContent = `${title} · ${entry.label}`;
+    if (!entry.hasData) {
+        valueEl.textContent = "–";
+        deltaEl.textContent = "Not in this sheet";
+        return;
+    }
+    valueEl.textContent = formatNumber(entry.demand);
+    if (!base || !base.hasData || base.demand <= 0) {
+        deltaEl.textContent = "No earlier month to compare";
+        return;
+    }
+    const diff = entry.demand - base.demand;
+    const pct = (diff / base.demand) * 100;
+    const sign = diff > 0 ? "+" : "";
+    const arrow = diff > 0 ? "▲" : diff < 0 ? "▼" : "●";
+    deltaEl.classList.add(diff > 0 ? "up" : diff < 0 ? "down" : "flat");
+    deltaEl.textContent = `${arrow} ${sign}${pct.toFixed(1)}% (${sign}${formatNumber(diff)}) vs ${base.label}`;
+}
+
 function paintDashboard(data, customer) {
     const s = data.summary;
     const trend = data.monthlyTrend || [];
-    const demand = data.demandCoverage ? data.demandCoverage.customerDemand : 0;
-    const prev = trend.find(m => m.month === shiftYearMonth(data.month, -1));
 
     updateCard("dashHeading", `${customer === "ALL" ? "All customers" : customer} · ${data.monthLabel}`);
     updateCard("dashSubheading", `Source: ${data.sheet.source}${data.sheet.date ? ` (${data.sheet.date})` : ""}`);
 
-    // card 1: customer schedule + change vs previous month
-    updateCard("dashSchedule", formatNumber(demand));
-    if (prev && prev.hasData) {
-        const delta = demand - prev.actualCustomerSchedule;
-        const pct = prev.actualCustomerSchedule > 0 ? ` (${delta >= 0 ? "+" : ""}${((delta / prev.actualCustomerSchedule) * 100).toFixed(1)}%)` : "";
-        updateCard("dashScheduleSub", `${delta >= 0 ? "+" : ""}${formatNumber(delta)}${pct} vs ${prev.label}`);
-    } else {
-        updateCard("dashScheduleSub", "No previous-month data");
-    }
+    // schedule cards: previous / selected / upcoming, each vs the month before it
+    const around = data.demandAround || {};
+    const mPrev = shiftYearMonth(data.month, -1);
+    const mNext = shiftYearMonth(data.month, 1);
+    paintScheduleCard("schedPrev", "Previous", around[mPrev], around[shiftYearMonth(data.month, -2)]);
+    paintScheduleCard("schedSel", "Selected", around[data.month], around[mPrev]);
+    paintScheduleCard("schedNext", "Upcoming", around[mNext], around[data.month]);
 
     // card 2: dispatched
     updateCard("dashDispatched", formatNumber(s.totalB));
