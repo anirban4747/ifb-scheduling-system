@@ -99,6 +99,13 @@
                         <label for="dashboardMonth">Month:</label>
                         <select id="dashboardMonth" class="select-compact" onchange="onDashboardMonthChange()"></select>
                     </div>
+                    <div class="control-group">
+                    <label for="dashboardTargetInput">Target:</label>
+                    <div class="dash-target-wrap">
+                        <input type="number" id="dashboardTargetInput" class="dash-target-input" min="1" max="100" value="80" oninput="onSharedTargetChange(this.value)" onchange="onSharedTargetChange(this.value)">
+                        <span class="dash-target-unit">%</span>
+                    </div>
+                </div>
                 </div>
 
                 <div class="header-action-links">
@@ -385,7 +392,7 @@
             </div>
             <select id="cmpYearSelect" class="cmp-year-select" onchange="onCmpYearChange()" style="display:none;" title="Select year"></select>
             <label class="cmp-target">Target
-                <input type="number" id="cmpTargetInput" min="50" max="100" value="95" onchange="renderTrendChart(); renderLineTable();"> %
+                <input type="number" id="cmpTargetInput" min="1" max="100" value="80" oninput="onSharedTargetChange(this.value)" onchange="onSharedTargetChange(this.value)"> %
             </label>
         </div>
     </div>

@@ -373,6 +373,7 @@ function showToast(message, type = "info") {
 // ==========================================================================
 
 function switchTab(tabId) {
+    syncTargetInputs(getActiveTarget());
     document.querySelector(".main-content")?.scrollTo(0, 0);
     document.querySelectorAll(".nav-tab").forEach(tab => {
         tab.classList.toggle("active", tab.getAttribute("data-tab") === tabId);
@@ -974,6 +975,7 @@ async function onSameSheetChange() {
 }
 
 async function initAnalysisTab() {
+    syncTargetInputs(getActiveTarget())
     await loadComparisonMeta();
     runStreamlinedAnalysis();
 }
@@ -1084,9 +1086,62 @@ function syncCmpYearDropdown(data) {
 
 let cmpLineSort = { key: "grossShortfall", dir: "desc" };
 
+let sharedTargetPercent = 80;
+
+function normalizeTargetValue(raw) {
+    const v = Number(raw);
+    return Number.isFinite(v) && v >= 1 && v <= 100 ? v : 80;
+}
+
+function getActiveTarget() {
+    return sharedTargetPercent;
+}
+
 function cmpTarget() {
-    const v = Number(document.getElementById("cmpTargetInput")?.value);
-    return Number.isFinite(v) && v >= 50 && v <= 100 ? v : 95;
+    return getActiveTarget();
+}
+
+function syncTargetInputs(value) {
+    const clean = normalizeTargetValue(value);
+    sharedTargetPercent = clean;
+
+    const dashInput = document.getElementById("dashboardTargetInput");
+    if (dashInput && Number(dashInput.value) !== clean) {
+        dashInput.value = String(clean);
+    }
+
+    const cmpInput = document.getElementById("cmpTargetInput");
+    if (cmpInput && Number(cmpInput.value) !== clean) {
+        cmpInput.value = String(clean);
+    }
+}
+
+function onSharedTargetChange(value) {
+    const trimmed = String(value ?? "").trim();
+    if (trimmed === "") return;
+    const num = Number(trimmed);
+    if (!Number.isFinite(num) || num < 1 || num > 100) return;
+
+    sharedTargetPercent = num;
+
+    const dashInput = document.getElementById("dashboardTargetInput");
+    if (dashInput && document.activeElement !== dashInput && Number(dashInput.value) !== num) {
+        dashInput.value = String(num);
+    }
+
+    const cmpInput = document.getElementById("cmpTargetInput");
+    if (cmpInput && document.activeElement !== cmpInput && Number(cmpInput.value) !== num) {
+        cmpInput.value = String(num);
+    }
+
+    refreshDashboardInsights();
+    if (cmpData) {
+        renderTrendChart();
+        renderLineTable();
+    }
+    if (currentComparisonRows.length) {
+        renderComparisonTable();
+    }
 }
 
 function cmpStatus(rate, target) {
@@ -1339,6 +1394,7 @@ async function runSameSheetStreamlined() {
         return;
     }
 
+    syncTargetInputs(getActiveTarget());
     try {
         const common = { snapshotId, customer, part, partQuery };
         if (month !== lastAnalysisMonth) {
@@ -1527,8 +1583,14 @@ function renderComparisonTable() {
             diffClass = "diff-neutral";
         }
 
+        const activeTarget = getActiveTarget();
         const diffDisplay = diff > 0 ? `+${formatNumber(diff)}` : formatNumber(diff);
         const pctDisplay = row.achievementRate == null ? "–" : `${row.achievementRate.toFixed(1)}%`;
+        const achClass = row.achievementRate == null
+            ? "diff-neutral"
+            : row.achievementRate >= activeTarget
+                ? "diff-positive"
+                : "diff-negative";
         const chg = row.scheduleChange;
         const chgClass = chg > 0 ? "diff-positive" : chg < 0 ? "diff-negative" : "diff-neutral";
         const chgDisplay = chg == null ? "–" : chg > 0 ? `+${formatNumber(chg)}` : formatNumber(chg);
@@ -1543,7 +1605,7 @@ function renderComparisonTable() {
     <td class="num">${formatNumber(row.qtyCommitment)}</td>
     <td class="num">${formatNumber(row.qtyDispatch)}</td>
     <td class="num ${diffClass}">${diffDisplay}</td>
-    <td class="num ${diffClass}">${pctDisplay}</td>
+    <td class="num ${achClass}">${pctDisplay}</td>
     <td class="num ${chgClass}" ${chgTitle}>${chgDisplay}</td>
     <td>${statusBadge}</td>
 </tr>`;
@@ -1551,19 +1613,26 @@ function renderComparisonTable() {
 
     const foot = document.getElementById("comparisonTableFoot");
     if (foot) {
+        const activeTarget = getActiveTarget();
         const tSched = filtered.reduce((s, r) => s + (r.qtySchedule ?? 0), 0);
         const tCommit = filtered.reduce((s, r) => s + (r.qtyCommitment ?? 0), 0);
         const tDisp = filtered.reduce((s, r) => s + (r.qtyDispatch ?? 0), 0);
         const tDiff = tDisp - tCommit;
-        const tAch = tCommit > 0 ? `${((tDisp / tCommit) * 100).toFixed(1)}%` : "–";
-        const tC = filtered.reduce((s, r) => s + (r.scheduleChange ?? 0), 0);
+        const tAchNum = tCommit > 0 ? (tDisp / tCommit) * 100 : null;
+        const tAch = tAchNum == null ? "–" : `${tAchNum.toFixed(1)}%`;
+        const tAchClass = tAchNum == null
+            ? ""
+            : tAchNum >= activeTarget
+                ? "diff-positive"
+                : "diff-negative";
         const anyChange = filtered.some(r => r.scheduleChange != null);
+        const tC = filtered.reduce((s, r) => s + (r.scheduleChange ?? 0), 0);
         foot.innerHTML = `<tr class="total-row"><td colspan="3">Total (${filtered.length} parts)</td>
             <td class="num">${formatNumber(tSched)}</td>
             <td class="num">${formatNumber(tCommit)}</td>
             <td class="num">${formatNumber(tDisp)}</td>
-            <td class="num">${tDiff > 0 ? "+" : ""}${formatNumber(tDiff)}</td>
-            <td class="num">${tAch}</td>
+            <td class="num ${tDiff > 0 ? "diff-positive" : tDiff < 0 ? "diff-negative" : "diff-neutral"}">${tDiff > 0 ? "+" : ""}${formatNumber(tDiff)}</td>
+            <td class="num ${tAchClass}">${tAch}</td>
             <td class="num">${anyChange ? (tC > 0 ? "+" : "") + formatNumber(tC) : ""}</td>
             <td></td></tr>`;
     }
@@ -1649,7 +1718,7 @@ function quickSelectCustomer(customer) {
 // DASHBOARD (reads the latest uploaded sheet through the analytics API)
 // ==========================================================================
 
-const DASH_TARGET = 95;
+const DASH_TARGET = 80;
 const DASH_COLORS = { "st-green": "#22c55e", "st-amber": "#f59e0b", "st-red": "#ef4444", "st-grey": "#94a3b8" };
 let dashSnapshotId = "";
 let dashAvailableMonths = [];
@@ -1898,7 +1967,7 @@ async function refreshDashboardInsights() {
                     partsShortfall += 1;
                 } else {
                     if (diff > 0) grossSurplusQty += diff;
-                    if (rate >= DASH_TARGET) partsOnTarget += 1;
+                    if (rate >= getActiveTarget()) partsOnTarget += 1;
                 }
 
                 const pKey = `${r.customerGroup || r.customer || ""}||${r.partNo || ""}`;
@@ -1985,6 +2054,7 @@ function paintScheduleCard(prefix, title, entry, base) {
 }
 
 function paintDashboard(data, customer) {
+    const target = getActiveTarget();
     const s = data.summary;
     const trend = data.monthlyTrend || [];
 
@@ -2006,9 +2076,9 @@ function paintDashboard(data, customer) {
     // card 3: fulfillment + bar
     const hasPlan = s.totalA > 0;
     const rate = hasPlan ? s.fulfillmentRate : null;
-    const st = cmpStatus(rate, DASH_TARGET);
+    const st = cmpStatus(rate, target);
     updateCard("dashFulfillment", hasPlan ? `${rate.toFixed(1)}%` : "–");
-    updateCard("dashFulfillmentSub", hasPlan ? `Target ${DASH_TARGET}% · ${st.label}` : "No commitment this month");
+    updateCard("dashFulfillmentSub", hasPlan ? `Target ${target}% · ${st.label}` : "No commitment this month");
     const bar = document.getElementById("dashFulfillmentBar");
     if (bar) {
         bar.style.width = `${hasPlan ? Math.min(rate, 100) : 0}%`;
@@ -2035,7 +2105,7 @@ function paintDashboard(data, customer) {
                 <td class="num">${formatNumber(r.qtyA)}</td>
                 <td class="num">${formatNumber(r.qtyB)}</td>
                 <td class="num neg">${formatNumber(r.diff)}</td>
-                <td>${rateCell(r.fulfillmentRate, cmpStatus(r.fulfillmentRate, DASH_TARGET))}</td>
+                <td>${rateCell(r.fulfillmentRate, cmpStatus(r.fulfillmentRate, target))}</td>
             </tr>`).join("")
             : `<tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px;">No parts are short for this month.</td></tr>`;
     }
@@ -2055,7 +2125,7 @@ function paintDashboard(data, customer) {
                 <td class="cell-trunc" title="${escapeHTML(c.customer)}"><strong>${escapeHTML(c.customer)}</strong></td>
                 <td class="num">${formatNumber(c.commitment)}</td>
                 <td class="num">${formatNumber(c.dispatched)}</td>
-                <td>${rateCell(c.fillRate, cmpStatus(c.fillRate, DASH_TARGET))}</td>
+                <td>${rateCell(c.fillRate, cmpStatus(c.fillRate, target))}</td>
             </tr>`).join("")
             : `<tr><td colspan="4" style="text-align:center;color:#64748b;padding:20px;">No customer data for this month.</td></tr>`;
     }
@@ -2085,7 +2155,7 @@ function renderDashTrend(trend, selectedMonth) {
 
     const groups = trend.map((m, i) => {
         const cx = pl + slot * i + slot / 2, x0 = cx - gw / 2;
-        const st = cmpStatus(m.fillRateVsCommitment, DASH_TARGET);
+        const st = cmpStatus(m.fillRateVsCommitment, getActiveTarget());
         const rateText = m.fillRateVsCommitment == null ? "–" : `${m.fillRateVsCommitment.toFixed(1)}%`;
         const bar = (v, cls, j) =>
             `<rect class="${cls}" x="${x0 + bw * j + 1}" y="${y(v)}" width="${bw - 2}" height="${Math.max(pt + ph - y(v), 0)}" rx="2"/>`;
@@ -2624,6 +2694,7 @@ async function initApplication() {
     try { localStorage.removeItem("company-analysis-filter-state"); } catch (e) {}
     document.querySelectorAll('a[href="/api/sample-template"]').forEach(a => { a.href = withTokenQuery(apiUrl("/api/sample-template")); });
     startClock();
+    syncTargetInputs(getActiveTarget());
     initializeSnapshotDate();
     initDragAndDrop();
     updateDashboardMonthLabels();
