@@ -15,12 +15,24 @@ const {
     loadUsers,
     authenticateUser,
     createToken,
+    parseSignedToken,
     requireAuth,
     requireAdmin,
+    revokeSessionFromRequest,
     listUsersSafe,
     createPortalUser,
     deletePortalUser
 } = require("./auth");
+const {
+    ALLOWED_CLIENT_ACTIONS,
+    logActivity,
+    recordSessionStart,
+    recordFailedLogin,
+    getSessions,
+    getActivityLogs,
+    formatLogsAsCsv,
+    createAuditMiddleware
+} = require("./audit-logger");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3001);
@@ -804,6 +816,10 @@ app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });
 });
 
+app.get("/favicon.ico", (req, res) => {
+    res.status(204).end();
+});
+
 // Serve index.html and login.html
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "../frontend/index.html"));
@@ -819,17 +835,23 @@ app.get("/login", (req, res) => {
 
 app.post("/api/auth/login", (req, res) => {
     const { username, password } = req.body || {};
-    if (!username || !password) {
-        return res.status(400).json({ message: "Username and password are required." });
-    }
-
     const user = authenticateUser(username, password);
     if (!user) {
+        recordFailedLogin(username, "Invalid credentials", req);
         return res.status(401).json({ message: "Invalid username or password." });
     }
-
     const token = createToken(user);
+    const payload = parseSignedToken(token);
+    if (payload?.sid) {
+        recordSessionStart({ sid: payload.sid, user, req });
+    }
     return res.json({ token, user });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+    const reason = req.body?.reason === "idle" ? "idle_timeout" : "logout";
+    revokeSessionFromRequest(req, reason);
+    return res.json({ success: true });
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
@@ -844,11 +866,13 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 });
 
 app.post("/api/auth/logout", (req, res) => {
+    revokeSessionFromRequest(req);
     return res.json({ success: true });
 });
 
 // Protect all schedule, dashboard, analytics, and upload routes below
 app.use(requireAuth);
+app.use(createAuditMiddleware());
 
 // ==========================================================================
 // ADMIN USER MANAGEMENT ENDPOINTS
@@ -872,6 +896,65 @@ app.delete("/api/users/:id", requireAdmin, (req, res) => {
         return res.status(400).json({ message: result.error });
     }
     return res.json({ success: true, deletedUserId: result.deletedUserId });
+});
+
+// ==========================================================================
+// SESSION & ACTIVITY AUDIT ENDPOINTS
+// ==========================================================================
+
+app.post("/api/audit/event", (req, res) => {
+    const { action, category, summary, meta } = req.body || {};
+    const cleanAction = String(action || "").trim().toUpperCase();
+    if (!ALLOWED_CLIENT_ACTIONS.has(cleanAction)) {
+        return res.status(400).json({ message: "Unsupported audit event action." });
+    }
+    const cleanCategory = ["dashboard", "export"].includes(String(category || "").toLowerCase())
+        ? String(category).toLowerCase()
+        : (cleanAction === "CSV_EXPORT" ? "export" : "dashboard");
+
+    logActivity({
+        req,
+        category: cleanCategory,
+        action: cleanAction,
+        summary: String(summary || cleanAction),
+        meta: meta && typeof meta === "object" ? meta : {}
+    });
+    return res.status(201).json({ logged: true });
+});
+
+app.get("/api/audit/sessions", requireAdmin, (req, res) => {
+    const data = getSessions({
+        limit: req.query.limit,
+        username: req.query.username,
+        status: req.query.status
+    });
+    return res.json(data);
+});
+
+app.get("/api/audit/logs", requireAdmin, (req, res) => {
+    const data = getActivityLogs({
+        limit: req.query.limit,
+        username: req.query.username,
+        category: req.query.category,
+        sid: req.query.sid,
+        search: req.query.search
+    });
+    return res.json(data);
+});
+
+app.get("/api/audit/export", requireAdmin, (req, res) => {
+    const { logs } = getActivityLogs({
+        limit: 1000,
+        username: req.query.username,
+        category: req.query.category,
+        sid: req.query.sid,
+        search: req.query.search
+    });
+    const csv = formatLogsAsCsv(logs);
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="IFB_Activity_Logs_${stamp}.csv"`);
+    return res.send(csv);
 });
 
 // Download sample Excel schedule template

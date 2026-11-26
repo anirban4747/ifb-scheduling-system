@@ -12,7 +12,12 @@ const API_BASE_URL = ["3000", "3001"].includes(window.location.port)
 
 const AUTH_TOKEN_KEY = "ifb_auth_token";
 const AUTH_USER_KEY = "ifb_auth_user";
+const AUTH_LAST_ACTIVITY_KEY = "ifb_last_activity";
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;       // 30 minutes
+const KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000; // Refresh backend idle clock every 10 min while active
 const NATIVE_FETCH = window.fetch.bind(window);
+let lastApiCallAt = Date.now();
+let idleMonitorStarted = false;
 
 function apiUrl(path) {
     return `${API_BASE_URL}${path}`;
@@ -30,17 +35,19 @@ function getStoredUser() {
     }
 }
 
-function getLoginPageUrl() {
-    return ["3000", "3001"].includes(window.location.port)
+function getLoginPageUrl(reason = "") {
+    const base = ["3000", "3001"].includes(window.location.port)
         ? "/login"
         : "login.html";
+    return reason ? `${base}?reason=${encodeURIComponent(reason)}` : base;
 }
 
-function redirectToLogin() {
+function redirectToLogin(reason = "") {
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
+    localStorage.removeItem(AUTH_LAST_ACTIVITY_KEY);
     if (!window.location.pathname.endsWith("/login") && !window.location.pathname.endsWith("login.html")) {
-        window.location.replace(getLoginPageUrl());
+        window.location.replace(getLoginPageUrl(reason));
     }
 }
 
@@ -51,35 +58,118 @@ function withTokenQuery(urlStr) {
     return `${urlStr}${sep}token=${encodeURIComponent(token)}`;
 }
 
-async function logoutPortal() {
+async function logoutPortal(reason = "") {
     const token = getAuthToken();
     try {
         if (token) {
             await NATIVE_FETCH(apiUrl("/api/auth/logout"), {
                 method: "POST",
-                headers: { Authorization: `Bearer ${token}` }
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ reason: reason || "logout" })
             });
         }
     } catch {
         // Ignore network errors on logout
     }
-    redirectToLogin();
+    redirectToLogin(reason);
 }
 
+function getLastActivityTime() {
+    const raw = Number(localStorage.getItem(AUTH_LAST_ACTIVITY_KEY));
+    return Number.isFinite(raw) && raw > 0 ? raw : Date.now();
+}
+
+function initIdleSessionMonitor() {
+    if (idleMonitorStarted) return;
+    idleMonitorStarted = true;
+
+    let lastWriteAt = 0;
+    let idleTimerId = null;
+    const keepaliveMs = Math.min(KEEPALIVE_INTERVAL_MS, Math.floor(IDLE_TIMEOUT_MS / 2));
+
+    const scheduleExactCheck = () => {
+        if (idleTimerId) clearTimeout(idleTimerId);
+        const remainingMs = Math.max(250, IDLE_TIMEOUT_MS - (Date.now() - getLastActivityTime()));
+        idleTimerId = setTimeout(checkIdleStatus, remainingMs + 100);
+    };
+
+    const recordActivity = (force = false) => {
+        const now = Date.now();
+        if (!force && now - lastWriteAt < 2000) return;
+        lastWriteAt = now;
+        localStorage.setItem(AUTH_LAST_ACTIVITY_KEY, String(now));
+        scheduleExactCheck();
+    };
+
+    const checkIdleStatus = async () => {
+        if (!getAuthToken()) return;
+        const now = Date.now();
+        const idleMs = now - getLastActivityTime();
+
+        if (idleMs >= IDLE_TIMEOUT_MS) {
+            await logoutPortal("idle");
+            return;
+        }
+
+        if (idleMs < keepaliveMs && now - lastApiCallAt >= keepaliveMs) {
+            try {
+                const res = await fetch(apiUrl("/api/auth/me"));
+                if (res.status === 401) {
+                    redirectToLogin("idle");
+                    return;
+                }
+            } catch {
+                // Ignore transient network hiccups
+            }
+        }
+        scheduleExactCheck();
+    };
+
+    recordActivity(true);
+
+    ["mousedown", "keydown", "scroll", "touchstart", "click", "mousemove"].forEach(evt => {
+        window.addEventListener(evt, () => recordActivity(false), { passive: true });
+    });
+
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) checkIdleStatus();
+    });
+
+    window.addEventListener("storage", event => {
+        if (event.key === AUTH_TOKEN_KEY && !event.newValue) {
+            redirectToLogin();
+        }
+        if (event.key === AUTH_LAST_ACTIVITY_KEY) {
+            scheduleExactCheck();
+        }
+    });
+
+    setInterval(checkIdleStatus, 5000);
+}
 function renderAuthUserChip(user) {
     const chip = document.getElementById("authUserChip");
     const nameEl = document.getElementById("authUserName");
     const usersTab = document.getElementById("navTabUsers");
+    const logsTab = document.getElementById("navTabLogs");
     if (!user) return;
     if (chip && nameEl) {
         const roleLabel = user.role ? ` (${user.role})` : "";
         nameEl.textContent = `${user.name || user.username}${roleLabel}`;
         chip.style.display = "inline-flex";
     }
+    const isAdmin = String(user.role || "").toLowerCase() === "admin";
     if (usersTab) {
-        const isAdmin = String(user.role || "").toLowerCase() === "admin";
         usersTab.style.display = isAdmin ? "" : "none";
         if (!isAdmin && document.getElementById("tab-users")?.classList.contains("active")) {
+            switchTab("dashboard");
+        }
+    }
+    if (logsTab) {
+        logsTab.style.display = isAdmin ? "" : "none";
+        if (!isAdmin && document.getElementById("tab-logs")?.classList.contains("active")) {
             switchTab("dashboard");
         }
     }
@@ -209,8 +299,11 @@ window.fetch = async (input, init = {}) => {
     }
 
     const response = await NATIVE_FETCH(input, { ...init, headers });
+    if (isApiRequest && response.ok && token) {
+        lastApiCallAt = Date.now();
+    }
     if (isApiRequest && response.status === 401 && !urlStr.includes("/api/auth/")) {
-        redirectToLogin();
+        redirectToLogin("idle");
     }
     return response;
 };
@@ -300,6 +393,12 @@ function switchTab(tabId) {
     if (tabId === "users") {
         loadAdminUsers();
     } 
+    if (tabId === "logs") {
+        loadAuditDashboard();
+    }
+    if (usageTrackingStarted && tabId !== "logs") {
+        logPortalUsage("TAB_VIEW", `Opened ${tabId.charAt(0).toUpperCase() + tabId.slice(1)} tab`, { tab: tabId });
+    }
 }
 
 // Live Clock
@@ -2330,6 +2429,8 @@ async function initApplication() {
         // Keep cached user if offline, otherwise loadDashboardData will report server error
     }
     renderAuthUserChip(currentUser);
+    initIdleSessionMonitor();
+    initUsageTracking();
 
     try { localStorage.removeItem("company-analysis-filter-state"); } catch (e) {}
     document.querySelectorAll('a[href="/api/sample-template"]').forEach(a => { a.href = withTokenQuery(apiUrl("/api/sample-template")); });
@@ -2352,3 +2453,264 @@ async function initApplication() {
 
 document.addEventListener("DOMContentLoaded", initApplication);
 
+// ==========================================================================
+// INTENTIONAL DASHBOARD USAGE TRACKING & ADMIN LOGS VIEWER
+// ==========================================================================
+
+let usageTrackingStarted = false;
+let lastUsageSignature = "";
+let lastUsageAt = 0;
+let activeAuditSessionFilter = "";
+let activeAuditCategory = "all";
+let activeAuditView = "logs";
+let auditSearchDebounceTimer = null;
+
+function logPortalUsage(action, summary, meta = {}, category = "dashboard") {
+    if (!getAuthToken()) return;
+    const signature = `${action}|${summary}`;
+    const now = Date.now();
+    if (signature === lastUsageSignature && now - lastUsageAt < 2000) return;
+    lastUsageSignature = signature;
+    lastUsageAt = now;
+
+    fetch(apiUrl("/api/audit/event"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, category, summary, meta })
+    }).catch(() => {
+        // Non-blocking audit beacon
+    });
+}
+
+function initUsageTracking() {
+    if (usageTrackingStarted) return;
+    usageTrackingStarted = true;
+
+    // 1. Track meaningful filter/dropdown/search changes (ignores passwords & audit-tab filters)
+    document.addEventListener("change", event => {
+        const el = event.target;
+        if (!el || el.type === "password" || el.type === "file") return;
+        const pane = el.closest(".tab-pane");
+        if (!pane || pane.id === "tab-logs" || pane.id === "tab-users") return;
+
+        const fieldLabel = el.getAttribute("aria-label")
+            || document.querySelector(`label[for="${el.id}"]`)?.textContent?.trim()
+            || el.id
+            || el.name
+            || "Filter";
+
+        let displayVal = el.value;
+        if (el.tagName === "SELECT" && el.selectedOptions?.[0]) {
+            displayVal = el.selectedOptions[0].textContent.trim();
+        }
+        displayVal = String(displayVal || "").trim() || "(cleared)";
+
+        if (pane.id === "tab-dashboard") {
+            logPortalUsage("DASHBOARD_FILTER", `Changed dashboard ${fieldLabel} to "${displayVal}"`, { field: fieldLabel, value: displayVal });
+        } else if (pane.id === "tab-analysis") {
+            logPortalUsage("ANALYSIS_FILTER", `Changed analysis ${fieldLabel} to "${displayVal}"`, { field: fieldLabel, value: displayVal });
+        } else if (pane.id === "tab-records") {
+            logPortalUsage("RECORDS_FILTER", `Changed records ${fieldLabel} to "${displayVal}"`, { field: fieldLabel, value: displayVal });
+        }
+    });
+
+    // 2. Track explicit high-value button clicks (CSV exports, Data Quality Check, trend range buttons)
+    document.addEventListener("click", event => {
+        const btn = event.target?.closest?.("button");
+        if (!btn) return;
+        const pane = btn.closest(".tab-pane");
+        if (!pane || pane.id === "tab-logs") return;
+
+        const onClickAttr = btn.getAttribute("onclick") || "";
+        const label = (btn.textContent || "").replace(/\s+/g, " ").trim();
+
+        if (onClickAttr.includes("exportRecordsToCSV") || onClickAttr.includes("exportComparisonToCSV") || /export\s+csv/i.test(label)) {
+            const source = pane.id.replace("tab-", "");
+            logPortalUsage("CSV_EXPORT", `Exported ${source} data to CSV`, { source }, "export");
+        } else if (onClickAttr.toLowerCase().includes("quality") || /quality/i.test(label) || btn.title?.toLowerCase().includes("quality")) {
+            logPortalUsage("DATA_QUALITY_CHECK", "Opened snapshot Data Quality Audit", { tab: pane.id.replace("tab-", "") });
+        } else if (onClickAttr.includes("selectTrendMonth") || onClickAttr.includes("setTrendRange")) {
+            logPortalUsage("DASHBOARD_FILTER", `Interacted with trend control (${label || "chart"})`, { tab: pane.id.replace("tab-", "") });
+        }
+    });
+}
+
+function formatAuditTimeCompact(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString("en-IN", {
+        day: "2-digit", month: "short",
+        hour: "2-digit", minute: "2-digit", hour12: true
+    });
+}
+
+function formatAuditTimeFull(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString("en-IN", {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true
+    });
+}
+
+function switchAuditView(view) {
+    activeAuditView = view === "sessions" ? "sessions" : "logs";
+    document.getElementById("auditPaneLogs").style.display = activeAuditView === "logs" ? "" : "none";
+    document.getElementById("auditPaneSessions").style.display = activeAuditView === "sessions" ? "" : "none";
+    document.getElementById("auditViewBtnLogs")?.classList.toggle("active", activeAuditView === "logs");
+    document.getElementById("auditViewBtnSessions")?.classList.toggle("active", activeAuditView === "sessions");
+}
+
+function setAuditCategory(category) {
+    activeAuditCategory = category || "all";
+    document.querySelectorAll("#auditCategoryPills .audit-filter-pill").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.category === activeAuditCategory);
+    });
+    loadAuditLogsOnly();
+}
+
+async function loadAuditDashboard() {
+    const currentUser = getStoredUser();
+    if (String(currentUser?.role || "").toLowerCase() !== "admin") return;
+    await Promise.all([loadAuditSessionsOnly(), loadAuditLogsOnly()]);
+}
+
+async function loadAuditSessionsOnly() {
+    const tbody = document.getElementById("auditSessionsTableBody");
+    if (!tbody) return;
+
+    try {
+        const res = await fetch(apiUrl("/api/audit/sessions?limit=60"));
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || "Failed to load sessions.");
+
+        const activeEl = document.getElementById("auditActiveSessionsCount");
+        const totalEl = document.getElementById("auditTotalSessionsCount");
+        if (activeEl) activeEl.textContent = String(data.activeCount ?? 0);
+        if (totalEl) totalEl.textContent = String(data.totalCount ?? 0);
+
+        const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+        if (!sessions.length) {
+            tbody.innerHTML = `<tr><td colspan="7" class="audit-empty-cell">No sessions recorded yet.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = sessions.map(s => {
+            const isActive = s.status === "active";
+            const isTimeout = !isActive && s.endReason === "idle_timeout";
+            const statusText = isActive ? "Active" : (isTimeout ? "Timed out" : "Signed out");
+            const badgeCls = isActive ? "audit-badge-active" : (isTimeout ? "audit-badge-timeout" : "audit-badge-ended");
+            const endIso = isActive ? s.lastActivityAt : s.logoutAt;
+            const roleCls = s.role === "admin" ? "audit-role-admin" : "audit-role-planner";
+
+            return `
+                <tr>
+                    <td>
+                        <div class="audit-user-cell">
+                            <div>
+                                <div class="audit-user-name">${escapeHTML(s.name || s.username)}</div>
+                                <div class="audit-user-sub">${escapeHTML(s.username)} &middot; <span class="audit-role-tag ${roleCls}">${escapeHTML(s.role)}</span></div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="audit-time-cell" title="${escapeHTML(formatAuditTimeFull(s.loginAt))}">${escapeHTML(formatAuditTimeCompact(s.loginAt))}</td>
+                    <td class="audit-time-cell" title="${escapeHTML(formatAuditTimeFull(endIso))}">${escapeHTML(formatAuditTimeCompact(endIso))}</td>
+                    <td><span class="audit-badge ${badgeCls}">${escapeHTML(statusText)}</span></td>
+                    <td style="text-align: center;"><span class="audit-count-pill">${Number(s.actionCount || 0)}</span></td>
+                    <td>
+                        <div class="audit-user-name" style="font-size: 12.5px;">${escapeHTML(s.device || "Unknown")}</div>
+                        <div class="audit-user-sub">${escapeHTML(s.ip || "—")}</div>
+                    </td>
+                    <td style="text-align: right;">
+                        <button type="button" class="btn-outline-sm" data-sid="${escapeHTML(s.sid)}" data-user="${escapeHTML(s.name || s.username)}" onclick="filterAuditBySession(this.dataset.sid, this.dataset.user)">Inspect →</button>
+                    </td>
+                </tr>
+            `;
+        }).join("");
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="7" class="audit-empty-cell" style="color: #dc2626;">${escapeHTML(err.message)}</td></tr>`;
+    }
+}
+
+async function loadAuditLogsOnly() {
+    const tbody = document.getElementById("auditLogsTableBody");
+    if (!tbody) return;
+
+    const search = (document.getElementById("auditSearchInput")?.value || "").trim();
+    const params = new URLSearchParams({ limit: "250", category: activeAuditCategory });
+    if (search) params.set("search", search);
+    if (activeAuditSessionFilter) params.set("sid", activeAuditSessionFilter);
+
+    try {
+        const res = await fetch(apiUrl(`/api/audit/logs?${params.toString()}`));
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || "Failed to load activity logs.");
+
+        const totalEventsEl = document.getElementById("auditTotalEventsCount");
+        if (totalEventsEl) totalEventsEl.textContent = String(data.totalCount ?? 0);
+
+        const logs = Array.isArray(data.logs) ? data.logs : [];
+        if (!logs.length) {
+            tbody.innerHTML = `<tr><td colspan="4" class="audit-empty-cell">No matching activity found.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = logs.map(l => {
+            const cat = String(l.category || "dashboard").toLowerCase();
+            const catLabel = cat === "change" ? "Change" : cat.charAt(0).toUpperCase() + cat.slice(1);
+            const roleCls = l.role === "admin" ? "audit-role-admin" : "audit-role-planner";
+
+            return `
+                <tr>
+                    <td class="audit-time-cell" title="${escapeHTML(formatAuditTimeFull(l.at))}">${escapeHTML(formatAuditTimeCompact(l.at))}</td>
+                    <td>
+                        <div class="audit-user-cell">
+                            <span class="audit-user-name">${escapeHTML(l.username)}</span>
+                            ${l.role && l.role !== "unknown" ? `<span class="audit-role-tag ${roleCls}">${escapeHTML(l.role)}</span>` : ""}
+                        </div>
+                    </td>
+                    <td><span class="audit-badge audit-badge-${escapeHTML(cat)}">${escapeHTML(catLabel)}</span></td>
+                    <td class="audit-summary-main" title="Action: ${escapeHTML(l.action)} | IP: ${escapeHTML(l.ip || "—")}">${escapeHTML(l.summary)}</td>
+                </tr>
+            `;
+        }).join("");
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="4" class="audit-empty-cell" style="color: #dc2626;">${escapeHTML(err.message)}</td></tr>`;
+    }
+}
+
+function filterAuditBySession(sid, labelName) {
+    activeAuditSessionFilter = sid;
+    const banner = document.getElementById("auditSessionBanner");
+    const text = document.getElementById("auditSessionBannerText");
+    if (banner && text) {
+        text.textContent = `Showing activity for ${labelName} (Session ${sid.slice(0, 8)}…)`;
+        banner.style.display = "flex";
+    }
+    switchAuditView("logs");
+    loadAuditLogsOnly();
+}
+
+function clearAuditSessionFilter() {
+    activeAuditSessionFilter = "";
+    const banner = document.getElementById("auditSessionBanner");
+    if (banner) banner.style.display = "none";
+    loadAuditLogsOnly();
+}
+
+function debouncedAuditLogSearch() {
+    clearTimeout(auditSearchDebounceTimer);
+    auditSearchDebounceTimer = setTimeout(() => loadAuditLogsOnly(), 250);
+}
+
+function exportAuditLogsCsv() {
+    const search = (document.getElementById("auditSearchInput")?.value || "").trim();
+    const params = new URLSearchParams({ category: activeAuditCategory });
+    if (search) params.set("search", search);
+    if (activeAuditSessionFilter) params.set("sid", activeAuditSessionFilter);
+
+    const url = withTokenQuery(apiUrl(`/api/audit/export?${params.toString()}`));
+    window.open(url, "_blank");
+}

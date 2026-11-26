@@ -224,6 +224,7 @@
                 }
 
                 localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+                localStorage.setItem("ifb_last_activity", String(Date.now()));
                 if (data.user) {
                     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
                 }
@@ -240,6 +241,10 @@
 
         document.addEventListener("DOMContentLoaded", () => {
             startLoginClock();
+            const params = new URLSearchParams(window.location.search);
+            if (params.get("reason") === "idle") {
+                showLoginError("You were signed out after 30 minutes of inactivity. Please sign in again.");
+            }
             checkExistingSession();
         });
     </script>

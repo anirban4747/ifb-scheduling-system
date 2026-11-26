@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { recordSessionTouch, recordSessionEnd, getSessionState } = require("./audit-logger");
 
 const authDataDir = process.env.DATA_DIR
     ? path.resolve(process.env.DATA_DIR)
@@ -8,6 +9,21 @@ const authDataDir = process.env.DATA_DIR
 const usersPath = path.join(authDataDir, "users.json");
 const TOKEN_SECRET = process.env.AUTH_SECRET || "ifb-scheduling-portal-dev-secret-change-me";
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+const IDLE_TIMEOUT_MINUTES = Number(process.env.IDLE_TIMEOUT_MINUTES || 30);
+const IDLE_TIMEOUT_MS = Math.max(1, IDLE_TIMEOUT_MINUTES) * 60 * 1000;
+console.log(`[auth] Session idle timeout set to ${Math.max(1, IDLE_TIMEOUT_MINUTES)} minute(s)`);
+const sessionActivity = new Map(); // sid -> last active timestamp (ms)
+const revokedSessions = new Map(); // sid -> token expiry timestamp (ms)
+
+function pruneSessionMaps(now = Date.now()) {
+    for (const [sid, lastSeen] of sessionActivity.entries()) {
+        if (now - lastSeen > IDLE_TIMEOUT_MS) sessionActivity.delete(sid);
+    }
+    for (const [sid, exp] of revokedSessions.entries()) {
+        if (now > exp) revokedSessions.delete(sid);
+    }
+}
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
     const derived = crypto.scryptSync(String(password), salt, 64).toString("hex");
@@ -75,19 +91,26 @@ function authenticateUser(username, password) {
 }
 
 function createToken(user) {
+    const now = Date.now();
+    const sid = crypto.randomBytes(12).toString("hex");
     const payload = {
+        sid,
         id: user.id,
         username: user.username,
         name: user.name,
         role: user.role,
-        exp: Date.now() + TOKEN_TTL_MS
+        iat: now,
+        exp: now + TOKEN_TTL_MS
     };
+    pruneSessionMaps(now);
+    sessionActivity.set(sid, now);
+
     const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
     const sig = crypto.createHmac("sha256", TOKEN_SECRET).update(encoded).digest("base64url");
     return `${encoded}.${sig}`;
 }
 
-function verifyToken(token) {
+function parseSignedToken(token) {
     if (!token || typeof token !== "string" || !token.includes(".")) return null;
     const [encoded, sig] = token.split(".");
     if (!encoded || !sig) return null;
@@ -100,12 +123,47 @@ function verifyToken(token) {
     }
 
     try {
-        const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-        if (!payload.exp || Date.now() > payload.exp) return null;
-        return payload;
+        return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
     } catch {
         return null;
     }
+}
+
+function verifyToken(token) {
+    const payload = parseSignedToken(token);
+    if (!payload) return null;
+
+    const now = Date.now();
+    if (!payload.exp || now > payload.exp) return null;
+
+    if (!payload.sid) return null;
+    if (revokedSessions.has(payload.sid)) return null;
+
+    let lastActive = sessionActivity.get(payload.sid);
+    if (lastActive === undefined) {
+        const persisted = getSessionState(payload.sid);
+        if (persisted?.status === "ended") return null;
+        lastActive = persisted?.lastActivityMs || payload.iat || now;
+    }
+
+    if (now - lastActive > IDLE_TIMEOUT_MS) {
+        sessionActivity.delete(payload.sid);
+        recordSessionEnd(payload.sid, "idle_timeout");
+        return null;
+    }
+    sessionActivity.set(payload.sid, now);
+    recordSessionTouch(payload.sid);
+
+    return payload;
+}
+
+function revokeSessionFromRequest(req, reason = "logout") {
+    const token = extractToken(req);
+    const payload = parseSignedToken(token);
+    if (!payload || !payload.sid) return;
+    sessionActivity.delete(payload.sid);
+    revokedSessions.set(payload.sid, payload.exp || (Date.now() + TOKEN_TTL_MS));
+    recordSessionEnd(payload.sid, reason, req);
 }
 
 function extractToken(req) {
@@ -210,7 +268,9 @@ module.exports = {
     loadUsers,
     authenticateUser,
     createToken,
+    parseSignedToken,
     verifyToken,
+    revokeSessionFromRequest,
     requireAuth,
     requireAdmin,
     listUsersSafe,
