@@ -76,28 +76,33 @@
         <section id="tab-dashboard" class="tab-pane active">
             
             <!-- Dashboard Controls & Customer Selector -->
+            <!-- Dashboard Controls & Customer Selector -->
             <div class="dashboard-controls-card">
-                <div class="control-group">
-                    <label for="customerSelect"><strong>Select Customer View:</strong></label>
-                    <select id="customerSelect" onchange="onCustomerSelectChange()">
-                        <option value="ALL">All Customers (Consolidated)</option>
-                    </select>
-                </div>
+                <div class="dash-filters-row">
+                    <div class="control-group">
+                        <label for="customerSelect">Customer:</label>
+                        <select id="customerSelect" onchange="onCustomerSelectChange()">
+                            <option value="ALL">All Customers (Consolidated)</option>
+                        </select>
+                    </div>
 
-                <div class="control-group">
-                    <label for="dashboardYear"><strong>Year:</strong></label>
-                    <select id="dashboardYear" class="select-compact" onchange="onDashboardYearChange()"></select>
-                    <label for="dashboardMonth"><strong>Month:</strong></label>
-                    <select id="dashboardMonth" class="select-compact" onchange="onDashboardMonthChange()"></select>
-                </div>
+                    <div class="control-group">
+                        <label for="dashboardSourceSelect">Source:</label>
+                        <select id="dashboardSourceSelect" class="select-compact" onchange="onDashboardSourceChange()">
+                            <option value="__ALL__">All Uploaded Sheets (Combined)</option>
+                        </select>
+                    </div>
 
-                <div class="quick-preset-btns">
-                    <span class="preset-label">Quick Switch:</span>
-                    <button type="button" class="chip-btn" onclick="quickSelectCustomer('ALL')">All Customers (Totals)</button>
+                    <div class="control-group">
+                        <label for="dashboardYear">Year:</label>
+                        <select id="dashboardYear" class="select-compact" onchange="onDashboardYearChange()"></select>
+                        <label for="dashboardMonth">Month:</label>
+                        <select id="dashboardMonth" class="select-compact" onchange="onDashboardMonthChange()"></select>
+                    </div>
                 </div>
 
                 <div class="header-action-links">
-                    <button class="btn-primary-sm" onclick="switchTab('upload')">+ Upload Schedule</button>
+                    <button type="button" class="btn-primary-sm" onclick="switchTab('upload')">+ Upload Schedule</button>
                 </div>
             </div>
 

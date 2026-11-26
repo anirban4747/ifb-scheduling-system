@@ -394,6 +394,10 @@ function switchTab(tabId) {
     if (tabId === "users") {
         loadAdminUsers();
     } 
+    if (tabId === "dashboard") {
+        syncDashboardSourceOptions();
+        renderDashboardForCustomer(activeCustomer);
+    }
     if (tabId === "logs") {
         loadAuditDashboard();
     }
@@ -1595,7 +1599,33 @@ function exportComparisonToCSV() {
     URL.revokeObjectURL(url);
     showToast("Comparison report exported successfully!", "success");
 }
+function onDashboardSourceChange() {
+    dashSnapshotId = "";
+    dashAvailableMonths = [];
+    loadDashboardData().then(() => {
+        populateCustomerDropdowns();
+        pickDefaultMonth(allScheduleRows);
+        updateDashboardMonthLabels();
+    });
+}
 
+async function syncDashboardSourceOptions() {
+    const sel = document.getElementById("dashboardSourceSelect");
+    if (!sel) return;
+    const prev = sel.value || "__ALL__";
+    try {
+        const res = await fetch(apiUrl("/api/imported-files"));
+        if (!res.ok) return;
+        const files = await res.json();
+        sel.innerHTML = `<option value="__ALL__">All Uploaded Sheets (Combined)</option>` +
+            (Array.isArray(files) ? files.map(f =>
+                `<option value="${escapeHTML(f.snapshotId)}">${escapeHTML(f.filename || f.source)} (${escapeHTML(f.snapshotDate)})</option>`
+            ).join("") : "");
+        sel.value = Array.from(sel.options).some(o => o.value === prev) ? prev : "__ALL__";
+    } catch {
+        // Keep current options on error
+    }
+}
 
 function onDashboardMonthChange() {
     updateDashboardMonthLabels();
@@ -1731,44 +1761,197 @@ function renderDashboardEmpty(message) {
 async function refreshDashboardInsights() {
     const runId = ++dashRunId;
     const customer = activeCustomer || "ALL";
+    const selectedSource = document.getElementById("dashboardSourceSelect")?.value || "__ALL__";
+
     try {
-        if (!dashSnapshotId) {
-            const metaRes = await fetch(apiUrl("/analytics/comparison-meta"));
-            if (!metaRes.ok) throw new Error("Could not load schedule sheets.");
-            const meta = await metaRes.json();
-            dashSnapshotId = meta.currentSnapshotId || "";
-            dashAvailableMonths = (meta.availableMonths || []).filter(m => /^\d{4}-\d{2}$/.test(m)).sort();
+        if (selectedSource !== "__ALL__") {
+            dashSnapshotId = selectedSource;
+            if (!dashAvailableMonths.length) {
+                const metaRes = await fetch(apiUrl(`/analytics/comparison-meta?snapshotId=${encodeURIComponent(dashSnapshotId)}`));
+                if (metaRes.ok) {
+                    const meta = await metaRes.json();
+                    dashAvailableMonths = (meta.availableMonths || []).filter(m => /^\d{4}-\d{2}$/.test(m)).sort();
+                    syncDashboardMonthControls(false);
+                }
+            }
+            if (runId !== dashRunId) return;
+            const month = getSelectedMonthKey();
+            const query = new URLSearchParams({
+                snapshotId: dashSnapshotId, mode: "metrics",
+                metricA: "commitment", metricB: "dispatch",
+                month, customer, range: "6"
+            });
+            const res = await fetch(apiUrl(`/analytics/compare-within-sheet?${query}`));
+            if (!res.ok) throw new Error("Dashboard request failed.");
+            const data = await res.json();
+            if (runId !== dashRunId) return;
+
+            if (data.status !== "available") {
+                renderDashboardEmpty(data.message || "No data available for this selection.");
+                return;
+            }
+            paintDashboard(data, customer);
+            return;
+        }
+
+        // Combined multi-sheet / multi-snapshot view from allScheduleRows
+        if (!dashAvailableMonths.length) {
+            dashAvailableMonths = getAvailableRecordMonths(allScheduleRows);
             syncDashboardMonthControls(false);
         }
         if (runId !== dashRunId) return;
-        const month = getSelectedMonthKey();
-        if (!dashSnapshotId) {
+
+        if (!allScheduleRows.length) {
             renderDashboardEmpty("No schedule uploaded yet. Use the Upload tab to import an Excel file.");
             return;
         }
 
-        const query = new URLSearchParams({
-            snapshotId: dashSnapshotId, mode: "metrics",
-            metricA: "commitment", metricB: "dispatch",
-            month, customer, range: "6"
-        });
-        const res = await fetch(apiUrl(`/analytics/compare-within-sheet?${query}`));
-        if (!res.ok) throw new Error("Dashboard request failed.");
-        const data = await res.json();
-        if (runId !== dashRunId) return;
+        const month = getSelectedMonthKey();
+        const monthsList = getDashboardMonthList();
+        const scopedRows = customer === "ALL"
+            ? allScheduleRows
+            : allScheduleRows.filter(r => (r.customerGroup || r.customer) === customer);
 
-        if (data.status !== "available") {
-            renderDashboardEmpty(data.message || "No data available for this selection.");
-            return;
-        }
-        paintDashboard(data, customer);
+        const trendMonths = monthsList.slice(-6);
+        const monthlyTrend = trendMonths.map(m => {
+            const label = formatMonthLabel(m);
+            let demand = 0;
+            let commitment = 0;
+            let dispatched = 0;
+            let hasData = false;
+
+            scopedRows.forEach(r => {
+                const schedVal = (r.monthlySchedules && Object.prototype.hasOwnProperty.call(r.monthlySchedules, m))
+                    ? Number(r.monthlySchedules[m]) || 0
+                    : (m === month ? Number(r.currentMonth || r.customerSchedule) || 0 : 0);
+                const commitVal = (r.monthlyCommitments && Object.prototype.hasOwnProperty.call(r.monthlyCommitments, m))
+                    ? Number(r.monthlyCommitments[m]) || 0
+                    : schedVal;
+                const dispVal = (r.monthlyDispatches && Object.prototype.hasOwnProperty.call(r.monthlyDispatches, m))
+                    ? Number(r.monthlyDispatches[m]) || 0
+                    : (m === month ? Number(r.actualDispatch) || 0 : 0);
+
+                if (schedVal || commitVal || dispVal) hasData = true;
+                demand += schedVal;
+                commitment += commitVal;
+                dispatched += dispVal;
+            });
+
+            return {
+                month: m,
+                label,
+                actualCustomerSchedule: demand,
+                commitment,
+                dispatched,
+                fillRateVsCommitment: commitment > 0 ? (dispatched / commitment) * 100 : null,
+                hasData
+            };
+        });
+
+        const demandAround = {};
+        [-2, -1, 0, 1].forEach(offset => {
+            const mk = shiftYearMonth(month, offset);
+            let sumDemand = 0;
+            let any = false;
+            scopedRows.forEach(r => {
+                if (r.monthlySchedules && Object.prototype.hasOwnProperty.call(r.monthlySchedules, mk)) {
+                    sumDemand += Number(r.monthlySchedules[mk]) || 0;
+                    any = true;
+                }
+            });
+            demandAround[mk] = {
+                month: mk,
+                label: formatMonthLabel(mk),
+                demand: sumDemand,
+                hasData: any
+            };
+        });
+
+        const partMap = new Map();
+        const custMap = new Map();
+        let totalA = 0;
+        let totalB = 0;
+        let grossShortfallQty = 0;
+        let grossSurplusQty = 0;
+        let partsShortfall = 0;
+        let partsOnTarget = 0;
+
+        scopedRows.forEach(r => {
+            const commitQty = (r.monthlyCommitments && Object.prototype.hasOwnProperty.call(r.monthlyCommitments, month))
+                ? Number(r.monthlyCommitments[month]) || 0
+                : ((r.monthlySchedules && Object.prototype.hasOwnProperty.call(r.monthlySchedules, month))
+                    ? Number(r.monthlySchedules[month]) || 0
+                    : Number(r.companyCommitment || r.currentMonth) || 0);
+
+            const dispQty = (r.monthlyDispatches && Object.prototype.hasOwnProperty.call(r.monthlyDispatches, month))
+                ? Number(r.monthlyDispatches[month]) || 0
+                : Number(r.actualDispatch) || 0;
+
+            const diff = dispQty - commitQty;
+            totalA += commitQty;
+            totalB += dispQty;
+
+            if (commitQty > 0) {
+                const rate = (dispQty / commitQty) * 100;
+                if (diff < 0) {
+                    grossShortfallQty += Math.abs(diff);
+                    partsShortfall += 1;
+                } else {
+                    if (diff > 0) grossSurplusQty += diff;
+                    if (rate >= DASH_TARGET) partsOnTarget += 1;
+                }
+
+                const pKey = `${r.customerGroup || r.customer || ""}||${r.partNo || ""}`;
+                const existingPart = partMap.get(pKey) || {
+                    partNo: r.partNo || "-",
+                    customer: r.customerGroup || r.customer || "-",
+                    qtyA: 0,
+                    qtyB: 0,
+                    diff: 0,
+                    fulfillmentRate: null
+                };
+                existingPart.qtyA += commitQty;
+                existingPart.qtyB += dispQty;
+                existingPart.diff = existingPart.qtyB - existingPart.qtyA;
+                existingPart.fulfillmentRate = existingPart.qtyA > 0 ? (existingPart.qtyB / existingPart.qtyA) * 100 : null;
+                partMap.set(pKey, existingPart);
+            }
+
+            const cName = r.customerGroup || r.customer || "Unknown";
+            const existingCust = custMap.get(cName) || { customer: cName, commitment: 0, dispatched: 0, fillRate: null };
+            existingCust.commitment += commitQty;
+            existingCust.dispatched += dispQty;
+            existingCust.fillRate = existingCust.commitment > 0 ? (existingCust.dispatched / existingCust.commitment) * 100 : null;
+            custMap.set(cName, existingCust);
+        });
+
+        const combinedData = {
+            status: "available",
+            month,
+            monthLabel: formatMonthLabel(month),
+            sheet: { source: "All Uploaded Sheets (Combined)", date: "" },
+            summary: {
+                totalA,
+                totalB,
+                fulfillmentRate: totalA > 0 ? (totalB / totalA) * 100 : 0,
+                grossShortfallQty,
+                grossSurplusQty,
+                partsShortfall,
+                partsOnTarget
+            },
+            demandAround,
+            monthlyTrend,
+            rows: Array.from(partMap.values()),
+            byCustomer: Array.from(custMap.values())
+        };
+
+        paintDashboard(combinedData, customer);
     } catch (err) {
         if (runId !== dashRunId) return;
         console.error("refreshDashboardInsights error:", err);
         renderDashboardEmpty("Could not load dashboard data. Check that the backend is running.");
     }
 }
-
 function paintScheduleCard(prefix, title, entry, base) {
     const labelEl = document.getElementById(`${prefix}Label`);
     const valueEl = document.getElementById(`${prefix}Value`);
@@ -2202,6 +2385,27 @@ function downloadImportedFile(snapshotId) {
     window.location.href = withTokenQuery(apiUrl(`/api/download-file/${encodeURIComponent(snapshotId)}`));
 }
 
+async function refreshPortalAfterFileChange(rows) {
+    if (Array.isArray(rows)) {
+        allScheduleRows = rows;
+    } else {
+        await loadDashboardData();
+    }
+    dashSnapshotId = "";
+    dashAvailableMonths = [];
+    await loadMasterData();
+    await syncDashboardSourceOptions();
+    activeCustomer = "ALL";
+    pickDefaultMonth(allScheduleRows);
+    updateDashboardMonthLabels();
+    syncRecordsMonthFilter(true);
+    renderDashboardForCustomer(activeCustomer);
+    renderMasterRecordsTable();
+    await loadImportedFilesList();
+    await loadComparisonMeta();
+    runStreamlinedAnalysis();
+}
+
 async function deleteImportedFile(snapshotId, filename) {
     if (!confirm(`Are you sure you want to delete the imported schedule workbook "${filename}"?\nThis will remove its records from the portal.`)) {
         return;
@@ -2214,20 +2418,7 @@ async function deleteImportedFile(snapshotId, filename) {
         if (!res.ok) throw new Error("Failed to delete snapshot.");
         const result = await res.json();
         showToast("Workbook & snapshot deleted successfully", "success");
-        dashSnapshotId = "";
-        dashAvailableMonths = [];
-
-        if (Array.isArray(result.rows)) {
-            allScheduleRows = result.rows;
-        } else {
-            await loadDashboardData();
-        }
-        renderDashboardForCustomer(activeCustomer);
-        renderMasterRecordsTable();
-        await loadMasterData();
-        loadImportedFilesList();
-        await loadComparisonMeta();
-        runStreamlinedAnalysis();
+        await refreshPortalAfterFileChange(Array.isArray(result.rows) ? result.rows : null);
     } catch (err) {
         showToast(err.message, "error");
     }
@@ -2340,15 +2531,7 @@ async function uploadExcel() {
                 return;
             }
 
-            allScheduleRows = importedRows;
-            dashSnapshotId = "";
-            dashAvailableMonths = [];
-            await loadMasterData();
-            activeCustomer = "ALL";
-            pickDefaultMonth(allScheduleRows);
-            syncRecordsMonthFilter(true);
-            renderDashboardForCustomer(activeCustomer);
-            renderMasterRecordsTable();
+            await refreshPortalAfterFileChange(importedRows);
 
             if (status) {
                 status.style.color = "#059669";
@@ -2392,7 +2575,12 @@ function pickDefaultMonth() {
 
 async function loadDashboardData() {
     try {
-        const response = await fetch(apiUrl("/dashboard"));
+        await syncDashboardSourceOptions();
+        const selectedSnap = document.getElementById("dashboardSourceSelect")?.value || "__ALL__";
+        const query = (selectedSnap && selectedSnap !== "__ALL__")
+            ? `?snapshotId=${encodeURIComponent(selectedSnap)}`
+            : "";
+        const response = await fetch(apiUrl(`/dashboard${query}`));
         if (!response.ok) {
             throw new Error("Dashboard request failed.");
         }

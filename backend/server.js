@@ -368,7 +368,7 @@ function mapScheduleRow(record) {
         && !Object.prototype.hasOwnProperty.call(monthlySchedules, deliveryMonthKey)) {
         monthlySchedules[deliveryMonthKey] = currentMonth;
     }
-    
+
     const backlogValue = balanceIndex !== -1 ? values[balanceIndex] : null;
     const balance = backlogValue !== null && String(backlogValue).trim() !== ""
         ? toNumber(backlogValue)
@@ -431,6 +431,9 @@ function getScheduleRowKey(row) {
     return [
         row.customerCode || row.customer || "",
         row.partNo || "",
+        row.line || "",
+        row.sourceSheet || "",
+        row.source || "",
         row.version || "Current",
         row.deliveryMonth || "No month supplied"
     ].map(value => String(value).trim().toLowerCase()).join("|");
@@ -513,9 +516,7 @@ function parseMonth(val) {
     return null;
 }
 
-function parseScheduleWorkbook(workbook) {
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
+function parseSingleSheetRows(sheet) {
     const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
     let headerRowIdx = -1;
@@ -528,7 +529,7 @@ function parseScheduleWorkbook(workbook) {
     }
 
     if (headerRowIdx === -1) {
-        const legacyRows = getScheduleRecords(workbook.Sheets[sheetName], XLSX);
+        const legacyRows = getScheduleRecords(sheet, XLSX);
         return legacyRows.map(mapScheduleRow).filter(r => r.customer || r.partNo);
     }
 
@@ -637,6 +638,74 @@ function parseScheduleWorkbook(workbook) {
         rows.push(obj);
     }
     return rows;
+}
+
+function parseScheduleWorkbook(workbook) {
+    const allRows = [];
+    for (const sheetName of (workbook.SheetNames || [])) {
+        const sheet = workbook.Sheets[sheetName];
+        if (!sheet) continue;
+        const sheetRows = parseSingleSheetRows(sheet);
+        for (const row of sheetRows) {
+            allRows.push({
+                ...row,
+                sourceSheet: sheetName
+            });
+        }
+    }
+    return allRows;
+}
+
+function sumMonthMaps(targetMap = {}, sourceMap = {}) {
+    for (const [monthKey, val] of Object.entries(sourceMap || {})) {
+        const num = Number(val) || 0;
+        targetMap[monthKey] = (Number(targetMap[monthKey]) || 0) + num;
+    }
+}
+
+function combineRowsAcrossSnapshots(snapshots = [], fallbackRows = []) {
+    if (!Array.isArray(snapshots) || snapshots.length === 0) {
+        return Array.isArray(fallbackRows) ? fallbackRows : [];
+    }
+
+    const mergedByKey = new Map();
+
+    for (const snap of snapshots) {
+        const rows = Array.isArray(snap?.rows)
+            ? snap.rows
+            : Array.isArray(snap?.records)
+                ? snap.records
+                : [];
+
+        for (const row of rows) {
+            const key = [
+                String(row.customerCode || row.customer || "").trim().toLowerCase(),
+                String(row.partNo || row.partNumber || "").trim().toLowerCase(),
+                String(row.line || "").trim().toLowerCase(),
+                String(row.sourceSheet || "").trim().toLowerCase(),
+                String(row.source || snap?.source || "").trim().toLowerCase()
+            ].join("::");
+
+            if (!mergedByKey.has(key)) {
+                mergedByKey.set(key, {
+                    ...row,
+                    source: row.source || snap?.source || "",
+                    monthlySchedules: { ...(row.monthlySchedules || {}) },
+                    monthlyCommitments: { ...(row.monthlyCommitments || {}) },
+                    monthlyDispatches: { ...(row.monthlyDispatches || {}) },
+                    sourceCount: 1
+                });
+            } else {
+                const existing = mergedByKey.get(key);
+                sumMonthMaps(existing.monthlySchedules, row.monthlySchedules);
+                sumMonthMaps(existing.monthlyCommitments, row.monthlyCommitments);
+                sumMonthMaps(existing.monthlyDispatches, row.monthlyDispatches);
+                existing.sourceCount += 1;
+            }
+        }
+    }
+
+    return Array.from(mergedByKey.values());
 }
 
 function getDashboardSummary(rows) {
@@ -865,11 +934,6 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
     });
 });
 
-app.post("/api/auth/logout", (req, res) => {
-    revokeSessionFromRequest(req);
-    return res.json({ success: true });
-});
-
 // Protect all schedule, dashboard, analytics, and upload routes below
 app.use(requireAuth);
 app.use(createAuditMiddleware());
@@ -1030,12 +1094,34 @@ app.get("/master-data", (req, res) => {
 });
 
 app.get("/dashboard", (req, res) => {
+    const { snapshotId = "", sourceSheet = "" } = req.query || {};
+    const snapshots = Array.isArray(scheduleSnapshots) ? scheduleSnapshots : [];
+
+    let rowsToUse = latestScheduleData;
+
+    if (snapshotId && snapshotId !== "__ALL__") {
+        const matched = snapshots.find(s => String(s.snapshotId || s.id) === String(snapshotId));
+        if (matched) {
+            rowsToUse = Array.isArray(matched.rows)
+                ? matched.rows
+                : Array.isArray(matched.records)
+                    ? matched.records
+                    : [];
+        }
+    } else if (snapshots.length > 0) {
+        rowsToUse = combineRowsAcrossSnapshots(snapshots, latestScheduleData);
+    }
+
+    if (sourceSheet && sourceSheet !== "__ALL__") {
+        rowsToUse = rowsToUse.filter(r => String(r.sourceSheet || "") === String(sourceSheet));
+    }
+
     res.json({
-        summary: getDashboardSummary(latestScheduleData),
-        rows: latestScheduleData
+        summary: getDashboardSummary(rowsToUse),
+        rows: rowsToUse,
+        totalSnapshots: snapshots.length
     });
 });
-
 
 app.get("/analytics/compare-within-sheet", (req, res) => {
     const { snapshotId, mode, monthA, monthB, metricA, metricB, month, customer, part, partQuery, range, trendYear } = req.query;
@@ -1060,8 +1146,6 @@ app.get("/analytics/comparison-meta", (req, res) => {
     const { snapshotId } = req.query;
     return res.json(getSnapshotComparisonMeta(scheduleSnapshots, snapshotId ? String(snapshotId) : undefined));
 });
-
-
 
 app.post("/api/load-sample-demo", (req, res) => {
     const demoSnapshots = [
@@ -1149,7 +1233,7 @@ app.post("/api/load-sample-demo", (req, res) => {
                     customerName2: "Whirlpool Pune Plant", partNo: "MTR-101-50W", customerPartNo: "WPL-7701",
                     helper: "H-01", line: "Line-A", model: "Semi-Auto WM", oem: "OEM-W",
                     productDescription: "Wash Motor 50W Standard Stator", deliveryMonth: "Oct-26", version: "Rev-02",
-                    previousMonth: 950, currentMonth: 1400, comingMonth: 1500, // +200 revision
+                    previousMonth: 950, currentMonth: 1400, comingMonth: 1500,
                     companyCommitment: 1350, companyCommitmentProvided: true,
                     actualDispatch: 1320, actualDispatchProvided: true, actualDispatchMonthAligned: true,
                     dispatchDate: "2026-10-28", actualProductionQty: 1350, balance: 30,
@@ -1162,7 +1246,7 @@ app.post("/api/load-sample-demo", (req, res) => {
                     customerName2: "Whirlpool Pune Plant", partNo: "MTR-102-Spin", customerPartNo: "WPL-7702",
                     helper: "H-01", line: "Line-A", model: "Semi-Auto WM", oem: "OEM-W",
                     productDescription: "Spin Motor 40W High RPM", deliveryMonth: "Oct-26", version: "Rev-02",
-                    previousMonth: 800, currentMonth: 900, comingMonth: 950, // unchanged
+                    previousMonth: 800, currentMonth: 900, comingMonth: 950,
                     companyCommitment: 900, companyCommitmentProvided: true,
                     actualDispatch: 900, actualDispatchProvided: true, actualDispatchMonthAligned: true,
                     dispatchDate: "2026-10-25", actualProductionQty: 920, balance: 0,
@@ -1175,7 +1259,7 @@ app.post("/api/load-sample-demo", (req, res) => {
                     customerName2: "BSH Chennai", partNo: "MTR-201-BLDC", customerPartNo: "BSH-B300",
                     helper: "H-02", line: "Line-B", model: "Front Load WM", oem: "OEM-B",
                     productDescription: "BLDC Inverter Direct Drive Motor", deliveryMonth: "Oct-26", version: "Rev-02",
-                    previousMonth: 1500, currentMonth: 1450, comingMonth: 1650, // -150 revision
+                    previousMonth: 1500, currentMonth: 1450, comingMonth: 1650,
                     companyCommitment: 1450, companyCommitmentProvided: true,
                     actualDispatch: 1420, actualDispatchProvided: true, actualDispatchMonthAligned: true,
                     dispatchDate: "2026-10-30", actualProductionQty: 1450, balance: 30,
@@ -1201,7 +1285,7 @@ app.post("/api/load-sample-demo", (req, res) => {
                     customerName2: "Samsung Noida", partNo: "MTR-401-DD", customerPartNo: "SAM-DD99",
                     helper: "H-04", line: "Line-B", model: "EcoBubble WM", oem: "OEM-S",
                     productDescription: "Digital Inverter Motor 85W", deliveryMonth: "Oct-26", version: "Rev-02",
-                    previousMonth: 600, currentMonth: 820, comingMonth: 900, // +70 revision
+                    previousMonth: 600, currentMonth: 820, comingMonth: 900,
                     companyCommitment: 800, companyCommitmentProvided: true,
                     actualDispatch: 780, actualDispatchProvided: true, actualDispatchMonthAligned: true,
                     dispatchDate: "2026-10-29", actualProductionQty: 800, balance: 20,
@@ -1214,7 +1298,7 @@ app.post("/api/load-sample-demo", (req, res) => {
                     customerName2: "IFB Verna Goa", partNo: "MTR-501-Aqua", customerPartNo: "IFB-AQ01",
                     helper: "H-05", line: "Line-A", model: "Front Load Senator", oem: "IFB",
                     productDescription: "Permanent Magnet Motor 90W Ultra Silent", deliveryMonth: "Oct-26", version: "Rev-02",
-                    previousMonth: 0, currentMonth: 300, comingMonth: 450, // newly introduced part!
+                    previousMonth: 0, currentMonth: 300, comingMonth: 450,
                     companyCommitment: 300, companyCommitmentProvided: true,
                     actualDispatch: 290, actualDispatchProvided: true, actualDispatchMonthAligned: true,
                     dispatchDate: "2026-10-27", actualProductionQty: 300, balance: 10,
@@ -1229,9 +1313,9 @@ app.post("/api/load-sample-demo", (req, res) => {
     scheduleSnapshots = demoSnapshots;
     saveScheduleSnapshotData(scheduleSnapshots);
 
-    const merged = mergeScheduleRows([], demoSnapshots[1].rows);
-    latestScheduleData = merged;
-    saveScheduleData(merged);
+    const combined = combineRowsAcrossSnapshots(scheduleSnapshots, []);
+    latestScheduleData = combined;
+    saveScheduleData(combined);
 
     return res.json({
         success: true,
@@ -1242,14 +1326,18 @@ app.post("/api/load-sample-demo", (req, res) => {
 });
 
 app.get("/api/imported-files", (req, res) => {
-    const list = scheduleSnapshots.map((s, index) => ({
-        snapshotId: s.snapshotId,
-        source: s.source || "Excel upload",
-        snapshotDate: s.snapshotDate || s.capturedAt?.slice(0, 10) || "-",
-        capturedAt: s.capturedAt || "-",
-        rowCount: s.rows ? s.rows.length : 0,
-        filename: s.source || `Schedule_${s.snapshotDate || index + 1}.xlsx`
-    }));
+    const list = scheduleSnapshots.map((s, index) => {
+        const sheets = Array.from(new Set((s.rows || []).map(r => r.sourceSheet).filter(Boolean)));
+        return {
+            snapshotId: s.snapshotId,
+            source: s.source || "Excel upload",
+            sheets,
+            snapshotDate: s.snapshotDate || s.capturedAt?.slice(0, 10) || "-",
+            capturedAt: s.capturedAt || "-",
+            rowCount: s.rows ? s.rows.length : 0,
+            filename: s.source || `Schedule_${s.snapshotDate || index + 1}.xlsx`
+        };
+    });
     res.json(list.slice().reverse());
 });
 
@@ -1281,7 +1369,8 @@ app.get("/api/download-file/:snapshotId", (req, res) => {
                 "Helper": r.helper || "",
                 "Customer Part No": r.customerPartNo || "",
                 "Line": r.line || "",
-                "Description": r.productDescription || ""
+                "Description": r.productDescription || "",
+                "Sheet": r.sourceSheet || ""
             };
             if (r.monthlySchedules && typeof r.monthlySchedules === "object") {
                 Object.entries(r.monthlySchedules).forEach(([m, q]) => {
@@ -1332,19 +1421,11 @@ app.delete("/api/imported-file/:snapshotId", (req, res) => {
     });
 
     if (updatedSnapshots.length > 0) {
-        const remainingRows = [];
-        updatedSnapshots.forEach(snap => {
-            if (snap.rows && Array.isArray(snap.rows)) {
-                remainingRows.push(...snap.rows);
-            }
-        });
-        const rebuilt = mergeScheduleRows([], remainingRows);
-        latestScheduleData = rebuilt;
-        saveScheduleData(rebuilt);
+        latestScheduleData = combineRowsAcrossSnapshots(updatedSnapshots, []);
     } else {
-        latestScheduleData = latestScheduleData.filter(r => r.source !== removedSnapshot.source);
-        saveScheduleData(latestScheduleData);
+        latestScheduleData = [];
     }
+    saveScheduleData(latestScheduleData);
 
     return res.json({
         success: true,
@@ -1418,21 +1499,22 @@ app.post("/upload-excel", upload.single("excelFile"), async (req, res) => {
             }
         }
 
-        const updatedRows = mergeScheduleRows(latestScheduleData, importedRows);
         saveScheduleSnapshot(snapshot);
-        saveScheduleData(updatedRows);
-        latestScheduleData = updatedRows;
-        const summary = getDashboardSummary(updatedRows);
+        const combinedRows = combineRowsAcrossSnapshots(scheduleSnapshots, importedRows);
+        saveScheduleData(combinedRows);
+        latestScheduleData = combinedRows;
+        const summary = getDashboardSummary(combinedRows);
 
         return res.json({
             message: dbSaved
                 ? "Excel file uploaded and schedule data processed successfully."
                 : "Excel file uploaded successfully. Local processing completed; Oracle DB save is not available.",
             filename: req.file.originalname,
+            sheetsProcessed: workbook.SheetNames,
             snapshotId,
             snapshotDate,
             summary,
-            rows: updatedRows,
+            rows: combinedRows,
             database: dbSaved ? "saved to Oracle" : "local only",
             dbWarning
         });
@@ -1479,7 +1561,7 @@ function refreshExistingSnapshots() {
                         const wb = XLSX.readFile(p);
                         const parsed = parseScheduleWorkbook(wb);
                         if (parsed.length > 0) {
-                            snap.rows = parsed;
+                            snap.rows = parsed.map(r => ({ ...r, source: snap.source }));
                             changed = true;
                             console.log(`Re-parsed ${snap.source} with enhanced parser: ${parsed.length} rows found.`);
                         }
@@ -1503,7 +1585,7 @@ function refreshExistingSnapshots() {
                     snapshotDate: "2026-10-05",
                     capturedAt: new Date().toISOString(),
                     source: "Motor_Monthly_Plan_Oct26_Rev-01.xlsx",
-                    rows: parsed
+                    rows: parsed.map(r => ({ ...r, source: "Motor_Monthly_Plan_Oct26_Rev-01.xlsx" }))
                 };
                 scheduleSnapshots.push(snap);
                 changed = true;
@@ -1523,7 +1605,7 @@ function refreshExistingSnapshots() {
                     snapshotDate: "2026-09-05",
                     capturedAt: new Date().toISOString(),
                     source: "Motor_Monthly_Plan_Sep26.xlsx",
-                    rows: parsed
+                    rows: parsed.map(r => ({ ...r, source: "Motor_Monthly_Plan_Sep26.xlsx" }))
                 };
                 scheduleSnapshots.push(snap);
                 changed = true;
@@ -1534,8 +1616,7 @@ function refreshExistingSnapshots() {
 
     if (changed) {
         saveScheduleSnapshotData(scheduleSnapshots);
-        const allRows = scheduleSnapshots.flatMap(s => s.rows || []);
-        latestScheduleData = mergeScheduleRows([], allRows);
+        latestScheduleData = combineRowsAcrossSnapshots(scheduleSnapshots, []);
         saveScheduleData(latestScheduleData);
     }
 }
@@ -1543,12 +1624,13 @@ function refreshExistingSnapshots() {
 async function startServer() {
     const users = loadUsers();
     console.log(`Loaded ${users.length} portal user accounts.`);
-    latestScheduleData = loadScheduleData();
-    latestScheduleData = loadScheduleData();
-    console.log(`Loaded ${latestScheduleData.length} saved schedule records.`);
     scheduleSnapshots = loadScheduleSnapshots();
     console.log(`Loaded ${scheduleSnapshots.length} historical schedule snapshots.`);
     refreshExistingSnapshots();
+    latestScheduleData = scheduleSnapshots.length > 0
+        ? combineRowsAcrossSnapshots(scheduleSnapshots, loadScheduleData())
+        : loadScheduleData();
+    console.log(`Loaded ${latestScheduleData.length} combined schedule records.`);
     await initializeDatabase();
     app.listen(PORT, "0.0.0.0", () => {
         console.log(`Server running on port ${PORT}`);
