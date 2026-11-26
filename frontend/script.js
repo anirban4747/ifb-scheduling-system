@@ -6,7 +6,8 @@
 let allScheduleRows = [];
 let activeCustomer = "ALL";
 
-const API_BASE_URL = ["3000", "3001"].includes(window.location.port)
+const isLocalDev = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+const API_BASE_URL = (!isLocalDev || ["3000", "3001"].includes(window.location.port))
     ? ""
     : `${window.location.protocol}//${window.location.hostname}:3001`;
 

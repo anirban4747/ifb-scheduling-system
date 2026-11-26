@@ -99,7 +99,8 @@
     <script>
         const AUTH_TOKEN_KEY = "ifb_auth_token";
         const AUTH_USER_KEY = "ifb_auth_user";
-        const LOGIN_API_BASE = ["3000", "3001"].includes(window.location.port)
+        const isLocalDev = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+        const LOGIN_API_BASE = (!isLocalDev || ["3000", "3001"].includes(window.location.port))
             ? ""
             : `${window.location.protocol}//${window.location.hostname}:3001`;
 
